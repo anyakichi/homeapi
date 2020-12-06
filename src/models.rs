@@ -15,7 +15,7 @@ impl RawData {
     pub fn new(id: String) -> Self {
         Self {
             pk: "RAW_DATA".to_owned(),
-            id: id,
+            id,
             ..Default::default()
         }
     }
@@ -35,7 +35,7 @@ impl Device {
     pub fn new(id: String) -> Self {
         Self {
             pk: "DEVICE".to_owned(),
-            id: id,
+            id,
             ..Default::default()
         }
     }
@@ -55,7 +55,7 @@ impl Place {
     pub fn new(id: String) -> Self {
         Self {
             pk: "PLACE".to_owned(),
-            id: id,
+            id,
             ..Default::default()
         }
     }

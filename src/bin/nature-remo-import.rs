@@ -32,7 +32,7 @@ struct NatureRemoDevice {
     newest_events: NewestEvents,
 }
 
-static REQWEST: Lazy<reqwest::Client> = Lazy::new(|| reqwest::Client::new());
+static REQWEST: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 static NATURE_REMO_TOKEN: Lazy<String> = Lazy::new(|| std::env::var("NATURE_REMO_TOKEN").unwrap());
 static DB: Lazy<Client> = Lazy::new(|| {
     Client::new(
@@ -74,7 +74,7 @@ async fn import_devices() -> Result<()> {
         .iter()
         .filter_map(|x| x.as_ref())
         .max()
-        .map(|x| x.clone());
+        .cloned();
 
         if let Some(datetime) = datetime {
             let device = match devices.get(&entry.id) {
@@ -105,18 +105,19 @@ async fn import_devices() -> Result<()> {
     Ok(())
 }
 
-fn handler(_: Value, _: Context) -> Result<(), HandlerError> {
-    tokio::runtime::Runtime::new().unwrap().block_on(import_devices()).map_err(|e| {
+async fn handler(_: Value, _: Context) -> Result<(), HandlerError> {
+    import_devices().await.map_err(|e| {
         println!("{:?}", e);
         HandlerError::from("error")
     })
 }
 
 fn main() -> Result<()> {
-    lambda!(handler);
+    let mut rt = tokio::runtime::Runtime::new()?;
+
+    lambda!(move |event, context| rt.block_on(handler(event, context)));
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -124,6 +125,8 @@ mod tests {
 
     #[test]
     fn test_lambda_handler() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+
         let context = Context {
             aws_request_id: "0123456789".to_string(),
             function_name: "nature-remo-import".to_string(),
@@ -138,7 +141,7 @@ mod tests {
             deadline: 0,
         };
 
-        let result = super::handler(serde_json::Value::Null, context);
+        let result = rt.block_on(super::handler(serde_json::Value::Null, context));
 
         assert_eq!(result.is_err(), false);
     }

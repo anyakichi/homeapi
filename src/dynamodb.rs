@@ -48,7 +48,7 @@ impl Client {
             .get_item(input)
             .await?
             .item
-            .ok_or(anyhow!("no item"))?;
+            .ok_or_else(|| anyhow!("no item"))?;
 
         Ok(serde_dynamodb::from_hashmap(result)?)
     }
@@ -61,7 +61,7 @@ impl Client {
             let output = self.dynamodb.query(query_input.clone()).await?;
             let result = output
                 .items
-                .unwrap_or_else(|| vec![])
+                .unwrap_or_else(Vec::new)
                 .into_iter()
                 .map(|item| serde_dynamodb::from_hashmap(item).unwrap())
                 .collect::<Vec<D>>();
