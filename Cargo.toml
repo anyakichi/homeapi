@@ -19,6 +19,3 @@ serde = { version = "1.0", features = ["derive"] }
 serde_dynamodb = "0.6"
 serde_json = "1.0"
 tokio = { version = "0.2", features = ["full"] }
-
-[features]
-lambda = []

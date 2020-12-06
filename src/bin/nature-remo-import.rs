@@ -2,13 +2,11 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-#[cfg(feature = "lambda")]
 use lambda_runtime::{error::HandlerError, lambda, Context};
 use once_cell::sync::Lazy;
 use rusoto_core::Region;
 use rusoto_dynamodb::DynamoDbClient;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "lambda")]
 use serde_json::Value;
 
 use homeapi::dynamodb::Client;
@@ -107,7 +105,6 @@ async fn import_devices() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "lambda")]
 fn handler(_: Value, _: Context) -> Result<(), HandlerError> {
     tokio::runtime::Runtime::new().unwrap().block_on(import_devices()).map_err(|e| {
         println!("{:?}", e);
@@ -115,15 +112,34 @@ fn handler(_: Value, _: Context) -> Result<(), HandlerError> {
     })
 }
 
-#[cfg(feature = "lambda")]
 fn main() -> Result<()> {
     lambda!(handler);
     Ok(())
 }
 
-#[cfg(not(feature = "lambda"))]
-#[tokio::main]
-async fn main() -> Result<()> {
-    import_devices().await?;
-    Ok(())
+
+#[cfg(test)]
+mod tests {
+    use lambda_runtime::Context;
+
+    #[test]
+    fn test_lambda_handler() {
+        let context = Context {
+            aws_request_id: "0123456789".to_string(),
+            function_name: "nature-remo-import".to_string(),
+            memory_limit_in_mb: 128,
+            function_version: "$LATEST".to_string(),
+            invoked_function_arn: "arn:aws:lambda".to_string(),
+            xray_trace_id: Some("0987654321".to_string()),
+            client_context: Option::default(),
+            identity: Option::default(),
+            log_stream_name: "logStreamName".to_string(),
+            log_group_name: "logGroupName".to_string(),
+            deadline: 0,
+        };
+
+        let result = super::handler(serde_json::Value::Null, context);
+
+        assert_eq!(result.is_err(), false);
+    }
 }
