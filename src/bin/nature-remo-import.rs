@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -32,7 +33,12 @@ struct NatureRemoDevice {
     newest_events: NewestEvents,
 }
 
-static REQWEST: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
+static REQWEST: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::ClientBuilder::new()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap()
+});
 static NATURE_REMO_TOKEN: Lazy<String> = Lazy::new(|| std::env::var("NATURE_REMO_TOKEN").unwrap());
 static DB: Lazy<Client> = Lazy::new(|| {
     Client::new(
