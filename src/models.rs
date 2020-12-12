@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -59,6 +60,23 @@ impl Place {
             ..Default::default()
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Electricity {
+    #[serde(rename = "pk")]
+    pub id: String,
+
+    #[serde(rename = "sk")]
+    #[serde(with = "dynamodb_timestamp")]
+    pub timestamp: DateTime<Utc>,
+
+    #[serde(default)]
+    pub place: String,
+
+    pub cumulative_kwh_p: Decimal,
+    pub cumulative_kwh_n: Decimal,
+    pub current_w: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

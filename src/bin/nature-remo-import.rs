@@ -7,11 +7,13 @@ use lambda_runtime::{error::HandlerError, lambda, Context};
 use once_cell::sync::Lazy;
 use rusoto_core::Region;
 use rusoto_dynamodb::DynamoDbClient;
+use rust_decimal::prelude::*;
+use rust_decimal_macros::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use homeapi::dynamodb::Client;
-use homeapi::models::{Device, PlaceCondition, RawData};
+use homeapi::models::{Device, Electricity, PlaceCondition, RawData};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Event<T> {
@@ -30,7 +32,28 @@ struct NewestEvents {
 #[derive(Debug, Serialize, Deserialize)]
 struct NatureRemoDevice {
     id: String,
-    newest_events: NewestEvents,
+
+    newest_events: Option<NewestEvents>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NatureRemoEchonetliteProperty {
+    name: String,
+    epc: u32,
+    val: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NatureRemoSmartMeter {
+    echonetlite_properties: Vec<NatureRemoEchonetliteProperty>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NatureRemoAppliance {
+    id: String,
+    device: NatureRemoDevice,
+    smart_meter: Option<NatureRemoSmartMeter>,
 }
 
 static REQWEST: Lazy<reqwest::Client> = Lazy::new(|| {
@@ -46,6 +69,14 @@ static DB: Lazy<Client> = Lazy::new(|| {
         std::env::var("TABLE_NAME").unwrap(),
     )
 });
+
+fn parse_epc225(i: u32) -> Decimal {
+    if i < 0xA {
+        dec!(1) / Decimal::from_u32(10_u32.pow(i)).unwrap()
+    } else {
+        Decimal::from_u32(10_u32.pow(i - 0x9)).unwrap()
+    }
+}
 
 async fn import_devices() -> Result<()> {
     let mut items = Vec::new();
@@ -73,38 +104,44 @@ async fn import_devices() -> Result<()> {
         .collect();
 
     for entry in entries.iter() {
+        let device = match devices.get(&entry.id) {
+            Some(device) => device,
+            None => {
+                let mut device = Device::new(entry.id.to_string());
+                device.place = "unknown".to_owned();
+                DB.put_item(&device).await?;
+
+                devices.insert(device.id.clone(), device);
+                devices.get(&entry.id).unwrap()
+            }
+        };
+
+        if entry.newest_events.is_none() {
+            continue;
+        }
+
+        let newest_events = entry.newest_events.as_ref().unwrap();
+
         let datetime = [
-            entry.newest_events.hu.as_ref().map(|x| x.created_at),
-            entry.newest_events.il.as_ref().map(|x| x.created_at),
-            entry.newest_events.mo.as_ref().map(|x| x.created_at),
-            entry.newest_events.te.as_ref().map(|x| x.created_at),
+            newest_events.hu.as_ref().map(|x| x.created_at),
+            newest_events.il.as_ref().map(|x| x.created_at),
+            newest_events.mo.as_ref().map(|x| x.created_at),
+            newest_events.te.as_ref().map(|x| x.created_at),
         ]
         .iter()
         .filter_map(|x| x.as_ref())
         .max()
         .cloned();
 
-        if let Some(datetime) = datetime {
-            let device = match devices.get(&entry.id) {
-                Some(device) => device,
-                None => {
-                    let mut device = Device::new(entry.id.to_string());
-                    device.place = "unknown".to_owned();
-                    DB.put_item(&device).await?;
-
-                    devices.insert(device.id.clone(), device);
-                    devices.get(&entry.id).unwrap()
-                }
-            };
-
+        if let Some(timestamp) = datetime {
             let entry = PlaceCondition {
                 id: entry.id.to_string(),
-                timestamp: datetime,
+                timestamp,
                 place: device.place.to_string(),
-                temperature: entry.newest_events.te.as_ref().map(|x| x.val),
-                humidity: entry.newest_events.hu.as_ref().map(|x| x.val),
-                illuminance: entry.newest_events.il.as_ref().map(|x| x.val),
-                motion: entry.newest_events.mo.as_ref().map(|x| x.val),
+                temperature: newest_events.te.as_ref().map(|x| x.val),
+                humidity: newest_events.hu.as_ref().map(|x| x.val),
+                illuminance: newest_events.il.as_ref().map(|x| x.val),
+                motion: newest_events.mo.as_ref().map(|x| x.val),
             };
             items.push(entry);
         }
@@ -115,8 +152,73 @@ async fn import_devices() -> Result<()> {
     Ok(())
 }
 
+async fn import_appliances() -> Result<()> {
+    let mut items = Vec::new();
+
+    let body = REQWEST
+        .get("https://api.nature.global/1/appliances")
+        .bearer_auth(&*NATURE_REMO_TOKEN)
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    /* Write raw data */
+    let mut raw_data = RawData::new("nature-appliances".into());
+    raw_data.body = body.clone();
+    DB.put_item(&raw_data).await?;
+
+    let entries: Vec<NatureRemoAppliance> = serde_json::from_str(&body)?;
+
+    let devices: HashMap<String, Device> = DB
+        .get_devices()
+        .await?
+        .into_iter()
+        .map(|x| (x.id.clone(), x))
+        .collect();
+
+    for entry in entries.iter() {
+        if let Some(smart_meter) = &entry.smart_meter {
+            let props = &smart_meter.echonetlite_properties;
+            let epcs: HashMap<u32, u32> = props
+                .iter()
+                .map(|x| Ok((x.epc, x.val.parse::<u32>()?)))
+                .collect::<Result<_>>()?;
+
+            let timestamp = props.iter().map(|x| x.updated_at).max().unwrap();
+
+            let place = devices.get(&entry.device.id).unwrap().place.clone();
+
+            let coeff: Decimal = Decimal::from_u32(*epcs.get(&211).unwrap_or_else(|| &1)).unwrap()
+                * parse_epc225(*epcs.get(&225).unwrap_or_else(|| &0));
+            let cumulative_kwh_p =
+                coeff * Decimal::from_u32(*epcs.get(&224).unwrap_or_else(|| &0)).unwrap();
+            let cumulative_kwh_n =
+                coeff * Decimal::from_u32(*epcs.get(&227).unwrap_or_else(|| &0)).unwrap();
+            let current_w = *epcs.get(&231).unwrap_or_else(|| &0);
+
+            items.push(Electricity {
+                id: entry.device.id.to_string(),
+                timestamp,
+                place,
+                cumulative_kwh_p,
+                cumulative_kwh_n,
+                current_w,
+            });
+        }
+    }
+
+    DB.put_items(items).await?;
+
+    Ok(())
+}
+
 async fn handler(_: Value, _: Context) -> Result<(), HandlerError> {
     import_devices().await.map_err(|e| {
+        println!("{:?}", e);
+        HandlerError::from("error")
+    })?;
+    import_appliances().await.map_err(|e| {
         println!("{:?}", e);
         HandlerError::from("error")
     })
