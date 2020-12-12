@@ -48,6 +48,8 @@ static DB: Lazy<Client> = Lazy::new(|| {
 });
 
 async fn import_devices() -> Result<()> {
+    let mut items = Vec::new();
+
     let body = REQWEST
         .get("https://api.nature.global/1/devices")
         .bearer_auth(&*NATURE_REMO_TOKEN)
@@ -104,9 +106,11 @@ async fn import_devices() -> Result<()> {
                 illuminance: entry.newest_events.il.as_ref().map(|x| x.val),
                 motion: entry.newest_events.mo.as_ref().map(|x| x.val),
             };
-            DB.put_item(&entry).await?;
+            items.push(entry);
         }
     }
+
+    DB.put_items(items).await?;
 
     Ok(())
 }

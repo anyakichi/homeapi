@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use rusoto_dynamodb::{
-    AttributeValue, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput, QueryInput,
+    AttributeValue, BatchWriteItemInput, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput,
+    PutRequest, QueryInput, WriteRequest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -72,6 +73,41 @@ impl Client {
 
             query_input.exclusive_start_key = output.last_evaluated_key;
         }
+    }
+
+    pub async fn batch_put_items(&self, items: Vec<HashMap<String, AttributeValue>>) -> Result<()> {
+        let items = items
+            .into_iter()
+            .map(|item| WriteRequest {
+                put_request: Some(PutRequest { item }),
+                ..Default::default()
+            })
+            .collect();
+
+        let mut request_items = HashMap::new();
+        request_items.insert(self.table.clone(), items);
+
+        let input = BatchWriteItemInput {
+            request_items,
+            ..Default::default()
+        };
+
+        let _res = self.dynamodb.batch_write_item(input).await?;
+
+        Ok(())
+    }
+
+    pub async fn put_items<S>(&self, items: Vec<S>) -> Result<()>
+    where
+        S: Serialize,
+    {
+        let items = items
+            .iter()
+            .map(|x| serde_dynamodb::to_hashmap(x))
+            .collect::<Result<Vec<_>, _>>()?;
+        let _res = self.batch_put_items(items).await?;
+
+        Ok(())
     }
 
     pub async fn put_item<S>(&self, item: &S) -> Result<()>
