@@ -78,41 +78,19 @@ fn parse_epc225(i: u32) -> Decimal {
     }
 }
 
-async fn import_devices() -> Result<()> {
+async fn import_devices(body: &str, devices: &Vec<Device>) -> Result<()> {
     let mut items = Vec::new();
-
-    let body = REQWEST
-        .get("https://api.nature.global/1/devices")
-        .bearer_auth(&*NATURE_REMO_TOKEN)
-        .send()
-        .await?
-        .text()
-        .await?;
-
-    /* Write raw data */
-    let mut raw_data = RawData::new("nature-devices".into());
-    raw_data.body = body.clone();
-    DB.put_item(&raw_data).await?;
 
     let entries: Vec<NatureRemoDevice> = serde_json::from_str(&body)?;
 
-    let mut devices: HashMap<String, Device> = DB
-        .get_devices()
-        .await?
-        .into_iter()
-        .map(|x| (x.id.clone(), x))
-        .collect();
-
     for entry in entries.iter() {
-        let device = match devices.get(&entry.id) {
-            Some(device) => device,
+        let place = match devices.iter().find(|x| x.id == entry.id) {
+            Some(device) => device.place.clone(),
             None => {
                 let mut device = Device::new(entry.id.to_string());
                 device.place = "unknown".to_owned();
                 DB.put_item(&device).await?;
-
-                devices.insert(device.id.clone(), device);
-                devices.get(&entry.id).unwrap()
+                device.place.clone()
             }
         };
 
@@ -137,7 +115,7 @@ async fn import_devices() -> Result<()> {
             let entry = PlaceCondition {
                 id: entry.id.to_string(),
                 timestamp,
-                place: device.place.to_string(),
+                place,
                 temperature: newest_events.te.as_ref().map(|x| x.val),
                 humidity: newest_events.hu.as_ref().map(|x| x.val),
                 illuminance: newest_events.il.as_ref().map(|x| x.val),
@@ -152,30 +130,10 @@ async fn import_devices() -> Result<()> {
     Ok(())
 }
 
-async fn import_appliances() -> Result<()> {
+async fn import_appliances(body: &str, devices: &Vec<Device>) -> Result<()> {
     let mut items = Vec::new();
 
-    let body = REQWEST
-        .get("https://api.nature.global/1/appliances")
-        .bearer_auth(&*NATURE_REMO_TOKEN)
-        .send()
-        .await?
-        .text()
-        .await?;
-
-    /* Write raw data */
-    let mut raw_data = RawData::new("nature-appliances".into());
-    raw_data.body = body.clone();
-    DB.put_item(&raw_data).await?;
-
     let entries: Vec<NatureRemoAppliance> = serde_json::from_str(&body)?;
-
-    let devices: HashMap<String, Device> = DB
-        .get_devices()
-        .await?
-        .into_iter()
-        .map(|x| (x.id.clone(), x))
-        .collect();
 
     for entry in entries.iter() {
         if let Some(smart_meter) = &entry.smart_meter {
@@ -187,7 +145,11 @@ async fn import_appliances() -> Result<()> {
 
             let timestamp = props.iter().map(|x| x.updated_at).max().unwrap();
 
-            let place = devices.get(&entry.device.id).unwrap().place.clone();
+            let device = devices.iter().find(|x| x.id == entry.device.id);
+            let place = match device {
+                Some(device) => device.place.clone(),
+                None => "unknown".into()
+            };
 
             let coeff: Decimal = Decimal::from_u32(*epcs.get(&211).unwrap_or_else(|| &1)).unwrap()
                 * parse_epc225(*epcs.get(&225).unwrap_or_else(|| &0));
@@ -213,15 +175,55 @@ async fn import_appliances() -> Result<()> {
     Ok(())
 }
 
+async fn import() -> Result<()> {
+    let req_nature_devices = REQWEST
+        .get("https://api.nature.global/1/devices")
+        .bearer_auth(&*NATURE_REMO_TOKEN)
+        .send();
+
+    let req_nature_appliances = REQWEST
+        .get("https://api.nature.global/1/appliances")
+        .bearer_auth(&*NATURE_REMO_TOKEN)
+        .send();
+
+    let (res_nature_devices, res_nature_appliances, devices) = tokio::join!(
+        req_nature_devices,
+        req_nature_appliances,
+        DB.get_devices()
+    );
+
+    let (body_nature_devices, body_nature_appliances) = tokio::join!(
+        res_nature_devices?.text(),
+        res_nature_appliances?.text()
+    );
+
+    let devices = devices?;
+    let body_nature_devices = body_nature_devices?;
+    let body_nature_appliances = body_nature_appliances?;
+
+    let mut raw_nature_devices = RawData::new("nature-devices".into());
+    raw_nature_devices.body = body_nature_devices.clone();
+    let mut raw_nature_appliances = RawData::new("nature-appliances".into());
+    raw_nature_appliances.body = body_nature_appliances.clone();
+
+    let (res0, res1, res2) = tokio::join!(
+        DB.put_items(vec![raw_nature_devices, raw_nature_appliances]),
+        import_devices(&body_nature_devices, &devices),
+        import_appliances(&body_nature_appliances, &devices),
+    );
+    res0?;
+    res1?;
+    res2?;
+
+    Ok(())
+}
+
 async fn handler(_: Value, _: Context) -> Result<(), HandlerError> {
-    import_devices().await.map_err(|e| {
+    import().await.map_err(|e| {
         println!("{:?}", e);
         HandlerError::from("error")
     })?;
-    import_appliances().await.map_err(|e| {
-        println!("{:?}", e);
-        HandlerError::from("error")
-    })
+    Ok(())
 }
 
 fn main() -> Result<()> {
