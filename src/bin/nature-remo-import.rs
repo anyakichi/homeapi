@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use homeapi::dynamodb::Client;
-use homeapi::models::{Device, Electricity, PlaceCondition, RawData};
+use homeapi::models::{Device, Electricity, PlaceCondition};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Event<T> {
@@ -201,19 +201,12 @@ async fn import() -> Result<()> {
     let body_nature_devices = body_nature_devices?;
     let body_nature_appliances = body_nature_appliances?;
 
-    let mut raw_nature_devices = RawData::new("nature-devices".into());
-    raw_nature_devices.body = body_nature_devices.clone();
-    let mut raw_nature_appliances = RawData::new("nature-appliances".into());
-    raw_nature_appliances.body = body_nature_appliances.clone();
-
-    let (res0, res1, res2) = tokio::join!(
-        DB.put_items(vec![raw_nature_devices, raw_nature_appliances]),
+    let (res0, res1) = tokio::join!(
         import_devices(&body_nature_devices, &devices),
         import_appliances(&body_nature_appliances, &devices),
     );
     res0?;
     res1?;
-    res2?;
 
     Ok(())
 }
