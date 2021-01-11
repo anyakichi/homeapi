@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use rusoto_dynamodb::{
     AttributeValue, BatchWriteItemInput, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput,
     PutRequest, QueryInput, WriteRequest,
@@ -14,33 +15,37 @@ pub struct Client {
     pub table: String,
 }
 
+fn attr_string(val: String) -> AttributeValue {
+    AttributeValue {
+        s: Some(val),
+        ..Default::default()
+    }
+}
+
+fn format_timestamp(timestamp: &DateTime<Utc>) -> String {
+    format!("TS#{:?}", timestamp)
+}
+
 impl Client {
     pub fn new(dynamodb: DynamoDbClient, table: String) -> Self {
         Self { dynamodb, table }
     }
 
-    pub async fn get_item(&self, pk: &str, sk: &str) -> Result<HashMap<String, AttributeValue>> {
-        let mut query = HashMap::new();
-
-        query.insert(
-            "pk".into(),
-            AttributeValue {
-                s: Some(pk.to_string()),
-                ..Default::default()
-            },
-        );
-
-        query.insert(
-            "sk".into(),
-            AttributeValue {
-                s: Some(sk.to_string()),
-                ..Default::default()
-            },
-        );
+    pub async fn get_item<'de, D>(&self, pk: &str, sk: &str) -> Result<D>
+    where
+        D: Deserialize<'de>,
+    {
+        let key: HashMap<String, AttributeValue> = [
+            ("pk".to_owned(), attr_string(pk.to_string())),
+            ("sk".to_owned(), attr_string(sk.to_string())),
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         let input = GetItemInput {
             table_name: self.table.clone(),
-            key: query,
+            key,
             ..Default::default()
         };
 
@@ -52,6 +57,48 @@ impl Client {
             .ok_or_else(|| anyhow!("no item"))?;
 
         Ok(serde_dynamodb::from_hashmap(result)?)
+    }
+
+    pub async fn query<'de, D>(
+        &self,
+        pk: &str,
+        expression: Option<(&str, &HashMap<String, AttributeValue>)>,
+    ) -> Result<Vec<D>>
+    where
+        D: Deserialize<'de>,
+    {
+        let (key_condition_expression, expression_attribute_values) = match expression {
+            Some((expression, params)) => {
+                let mut params = params.clone();
+                params.insert(":pk".to_owned(), attr_string(pk.to_string()));
+                (Some(format!("pk = :pk AND ({})", expression)), Some(params))
+            }
+            None => {
+                let params: HashMap<String, AttributeValue> =
+                    [(":pk".to_string(), attr_string(pk.to_string()))]
+                        .iter()
+                        .cloned()
+                        .collect();
+                (Some("pk = :pk".to_owned()), Some(params))
+            }
+        };
+
+        let query_input = QueryInput {
+            table_name: self.table.clone(),
+            key_condition_expression,
+            expression_attribute_values,
+            ..Default::default()
+        };
+
+        let output = self.dynamodb.query(query_input).await?;
+        let result = output
+            .items
+            .unwrap_or_else(Vec::new)
+            .into_iter()
+            .map(|item| serde_dynamodb::from_hashmap(item).unwrap())
+            .collect::<Vec<D>>();
+
+        Ok(result)
     }
 
     pub async fn get_all_items<'de, D>(&self, query_input: &mut QueryInput) -> Result<Vec<D>>
@@ -124,25 +171,43 @@ impl Client {
         Ok(())
     }
 
+    pub async fn get_device(&self, id: &str) -> Result<Device> {
+        self.get_item("DEVICE", id).await
+    }
+
     pub async fn get_devices(&self) -> Result<Vec<Device>> {
-        let query: HashMap<String, AttributeValue> = [(
-            ":id".to_string(),
-            AttributeValue {
-                s: Some("DEVICE".into()),
-                ..Default::default()
-            },
-        )]
-        .iter()
-        .cloned()
-        .collect();
+        self.query("DEVICE", None).await
+    }
 
-        let mut query_input = QueryInput {
-            table_name: self.table.clone(),
-            key_condition_expression: Some("pk = :id".into()),
-            expression_attribute_values: Some(query),
-            ..Default::default()
-        };
+    pub async fn get_entries<'de, D>(
+        &self,
+        id: &str,
+        start: Option<&DateTime<Utc>>,
+        end: Option<&DateTime<Utc>>,
+    ) -> Result<Vec<D>>
+    where
+        D: Deserialize<'de>,
+    {
+        let mut expression = String::new();
+        let mut params: HashMap<String, AttributeValue> = HashMap::new();
 
-        self.get_all_items(&mut query_input).await
+        if let Some(start) = start {
+            expression.push_str(":start <= sk");
+            params.insert(":start".to_owned(), attr_string(format_timestamp(start)));
+        }
+
+        if let Some(end) = end {
+            if !expression.is_empty() {
+                expression.push_str(" AND ")
+            }
+            expression.push_str("sk < :end");
+            params.insert(":end".to_owned(), attr_string(format_timestamp(end)));
+        }
+
+        if expression.is_empty() {
+            self.query(id, None).await
+        } else {
+            self.query(id, Some((&expression, &params))).await
+        }
     }
 }

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use juniper::graphql_object;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +43,17 @@ impl Device {
     }
 }
 
+#[graphql_object]
+impl Device {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    fn place(&self) -> &str {
+        self.place.as_str()
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Place {
     pk: String,
@@ -79,6 +91,33 @@ pub struct Electricity {
     pub current_w: u32,
 }
 
+#[graphql_object]
+impl Electricity {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    fn timestamp(&self) -> String {
+        format!("{:?}", &self.timestamp)
+    }
+
+    fn place(&self) -> &str {
+        self.place.as_str()
+    }
+
+    fn cumulative_kwh_p(&self) -> String {
+        format!("{}", &self.cumulative_kwh_p)
+    }
+
+    fn cumulative_kwh_n(&self) -> String {
+        format!("{}", &self.cumulative_kwh_n)
+    }
+
+    fn current_w(&self) -> String {
+        format!("{}", &self.current_w)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlaceCondition {
     #[serde(rename = "pk")]
@@ -101,6 +140,37 @@ pub struct PlaceCondition {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motion: Option<i64>,
+}
+
+#[graphql_object]
+impl PlaceCondition {
+    fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    fn timestamp(&self) -> String {
+        format!("{:?}", &self.timestamp)
+    }
+
+    fn place(&self) -> &str {
+        self.place.as_str()
+    }
+
+    fn temperature(&self) -> Option<String> {
+        self.temperature.map(|x| format!("{}", &x))
+    }
+
+    fn humidity(&self) -> Option<String> {
+        self.humidity.map(|x| format!("{}", &x))
+    }
+
+    fn illuminance(&self) -> Option<String> {
+        self.illuminance.map(|x| format!("{}", &x))
+    }
+
+    fn motion(&self) -> Option<String> {
+        self.motion.map(|x| format!("{}", &x))
+    }
 }
 
 mod dynamodb_timestamp {
