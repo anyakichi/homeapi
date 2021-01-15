@@ -78,7 +78,7 @@ fn parse_epc225(i: u32) -> Decimal {
     }
 }
 
-async fn import_devices(devices: &Vec<Device>) -> Result<()> {
+async fn import_devices(devices: &[Device]) -> Result<()> {
     let mut items = Vec::new();
 
     let entries: Vec<NatureRemoDevice> = REQWEST
@@ -136,7 +136,7 @@ async fn import_devices(devices: &Vec<Device>) -> Result<()> {
     Ok(())
 }
 
-async fn import_appliances(devices: &Vec<Device>) -> Result<()> {
+async fn import_appliances(devices: &[Device]) -> Result<()> {
     let mut items = Vec::new();
 
     let entries: Vec<NatureRemoAppliance> = REQWEST
@@ -163,13 +163,13 @@ async fn import_appliances(devices: &Vec<Device>) -> Result<()> {
                 None => "unknown".into(),
             };
 
-            let coeff: Decimal = Decimal::from_u32(*epcs.get(&211).unwrap_or_else(|| &1)).unwrap()
-                * parse_epc225(*epcs.get(&225).unwrap_or_else(|| &0));
+            let coeff: Decimal = Decimal::from_u32(*epcs.get(&211).unwrap_or(&1)).unwrap()
+                * parse_epc225(*epcs.get(&225).unwrap_or(&0));
             let cumulative_kwh_p =
-                coeff * Decimal::from_u32(*epcs.get(&224).unwrap_or_else(|| &0)).unwrap();
+                coeff * Decimal::from_u32(*epcs.get(&224).unwrap_or(&0)).unwrap();
             let cumulative_kwh_n =
-                coeff * Decimal::from_u32(*epcs.get(&227).unwrap_or_else(|| &0)).unwrap();
-            let current_w = *epcs.get(&231).unwrap_or_else(|| &0);
+                coeff * Decimal::from_u32(*epcs.get(&227).unwrap_or(&0)).unwrap();
+            let current_w = *epcs.get(&231).unwrap_or(&0);
 
             items.push(Electricity {
                 id: entry.device.id.to_string(),
