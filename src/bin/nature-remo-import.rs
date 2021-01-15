@@ -78,10 +78,16 @@ fn parse_epc225(i: u32) -> Decimal {
     }
 }
 
-async fn import_devices(body: &str, devices: &Vec<Device>) -> Result<()> {
+async fn import_devices(devices: &Vec<Device>) -> Result<()> {
     let mut items = Vec::new();
 
-    let entries: Vec<NatureRemoDevice> = serde_json::from_str(&body)?;
+    let entries: Vec<NatureRemoDevice> = REQWEST
+        .get("https://api.nature.global/1/devices")
+        .bearer_auth(&*NATURE_REMO_TOKEN)
+        .send()
+        .await?
+        .json()
+        .await?;
 
     for entry in entries.iter() {
         let place = match devices.iter().find(|x| x.id == entry.id) {
@@ -130,10 +136,16 @@ async fn import_devices(body: &str, devices: &Vec<Device>) -> Result<()> {
     Ok(())
 }
 
-async fn import_appliances(body: &str, devices: &Vec<Device>) -> Result<()> {
+async fn import_appliances(devices: &Vec<Device>) -> Result<()> {
     let mut items = Vec::new();
 
-    let entries: Vec<NatureRemoAppliance> = serde_json::from_str(&body)?;
+    let entries: Vec<NatureRemoAppliance> = REQWEST
+        .get("https://api.nature.global/1/appliances")
+        .bearer_auth(&*NATURE_REMO_TOKEN)
+        .send()
+        .await?
+        .json()
+        .await?;
 
     for entry in entries.iter() {
         if let Some(smart_meter) = &entry.smart_meter {
@@ -148,7 +160,7 @@ async fn import_appliances(body: &str, devices: &Vec<Device>) -> Result<()> {
             let device = devices.iter().find(|x| x.id == entry.device.id);
             let place = match device {
                 Some(device) => device.place.clone(),
-                None => "unknown".into()
+                None => "unknown".into(),
             };
 
             let coeff: Decimal = Decimal::from_u32(*epcs.get(&211).unwrap_or_else(|| &1)).unwrap()
@@ -176,35 +188,9 @@ async fn import_appliances(body: &str, devices: &Vec<Device>) -> Result<()> {
 }
 
 async fn import() -> Result<()> {
-    let req_nature_devices = REQWEST
-        .get("https://api.nature.global/1/devices")
-        .bearer_auth(&*NATURE_REMO_TOKEN)
-        .send();
+    let devices = DB.get_devices().await?;
 
-    let req_nature_appliances = REQWEST
-        .get("https://api.nature.global/1/appliances")
-        .bearer_auth(&*NATURE_REMO_TOKEN)
-        .send();
-
-    let (res_nature_devices, res_nature_appliances, devices) = tokio::join!(
-        req_nature_devices,
-        req_nature_appliances,
-        DB.get_devices()
-    );
-
-    let (body_nature_devices, body_nature_appliances) = tokio::join!(
-        res_nature_devices?.text(),
-        res_nature_appliances?.text()
-    );
-
-    let devices = devices?;
-    let body_nature_devices = body_nature_devices?;
-    let body_nature_appliances = body_nature_appliances?;
-
-    let (res0, res1) = tokio::join!(
-        import_devices(&body_nature_devices, &devices),
-        import_appliances(&body_nature_appliances, &devices),
-    );
+    let (res0, res1) = tokio::join!(import_devices(&devices), import_appliances(&devices));
     res0?;
     res1?;
 
