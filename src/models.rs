@@ -1,5 +1,5 @@
+use async_graphql::*;
 use chrono::{DateTime, Utc};
-use juniper::graphql_object;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -43,13 +43,13 @@ impl Device {
     }
 }
 
-#[graphql_object]
+#[Object]
 impl Device {
-    fn id(&self) -> &str {
+    async fn id(&self) -> &str {
         self.id.as_str()
     }
 
-    fn place(&self) -> &str {
+    async fn place(&self) -> &str {
         self.place.as_str()
     }
 }
@@ -91,30 +91,69 @@ pub struct Electricity {
     pub current_w: u32,
 }
 
-#[graphql_object]
+#[Object]
 impl Electricity {
-    fn id(&self) -> &str {
+    async fn id(&self) -> &str {
         self.id.as_str()
     }
 
-    fn timestamp(&self) -> String {
+    async fn timestamp(&self) -> String {
         format!("{:?}", &self.timestamp)
     }
 
-    fn place(&self) -> &str {
+    async fn place(&self) -> &str {
         self.place.as_str()
     }
 
-    fn cumulative_kwh_p(&self) -> String {
+    async fn cumulative_kwh_p(&self) -> String {
         format!("{}", &self.cumulative_kwh_p)
     }
 
-    fn cumulative_kwh_n(&self) -> String {
+    async fn cumulative_kwh_n(&self) -> String {
         format!("{}", &self.cumulative_kwh_n)
     }
 
-    fn current_w(&self) -> String {
+    async fn current_w(&self) -> String {
         format!("{}", &self.current_w)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FinalElectricity {
+    #[serde(rename = "pk")]
+    pub id: String,
+
+    #[serde(rename = "sk")]
+    #[serde(with = "dynamodb_fin_ts")]
+    pub timestamp: DateTime<Utc>,
+
+    #[serde(default)]
+    pub place: String,
+
+    pub cumulative_kwh_p: Decimal,
+    pub cumulative_kwh_n: Decimal,
+}
+
+#[Object]
+impl FinalElectricity {
+    async fn id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    async fn timestamp(&self) -> String {
+        format!("{:?}", &self.timestamp)
+    }
+
+    async fn place(&self) -> &str {
+        self.place.as_str()
+    }
+
+    async fn cumulative_kwh_p(&self) -> String {
+        format!("{}", &self.cumulative_kwh_p)
+    }
+
+    async fn cumulative_kwh_n(&self) -> String {
+        format!("{}", &self.cumulative_kwh_n)
     }
 }
 
@@ -142,33 +181,33 @@ pub struct PlaceCondition {
     pub motion: Option<i64>,
 }
 
-#[graphql_object]
+#[Object]
 impl PlaceCondition {
-    fn id(&self) -> &str {
+    async fn id(&self) -> &str {
         self.id.as_str()
     }
 
-    fn timestamp(&self) -> String {
+    async fn timestamp(&self) -> String {
         format!("{:?}", &self.timestamp)
     }
 
-    fn place(&self) -> &str {
+    async fn place(&self) -> &str {
         self.place.as_str()
     }
 
-    fn temperature(&self) -> Option<String> {
+    async fn temperature(&self) -> Option<String> {
         self.temperature.map(|x| format!("{}", &x))
     }
 
-    fn humidity(&self) -> Option<String> {
+    async fn humidity(&self) -> Option<String> {
         self.humidity.map(|x| format!("{}", &x))
     }
 
-    fn illuminance(&self) -> Option<String> {
+    async fn illuminance(&self) -> Option<String> {
         self.illuminance.map(|x| format!("{}", &x))
     }
 
-    fn motion(&self) -> Option<String> {
+    async fn motion(&self) -> Option<String> {
         self.motion.map(|x| format!("{}", &x))
     }
 }
@@ -190,6 +229,29 @@ mod dynamodb_timestamp {
     {
         let s = String::deserialize(deserializer)?;
         match s.strip_prefix("TS#") {
+            Some(prefix) => prefix.parse().map_err(serde::de::Error::custom),
+            None => Err(serde::de::Error::custom("Invalid prefix")),
+        }
+    }
+}
+
+mod dynamodb_fin_ts {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(timestamp: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("FIN#TS#{:?}", timestamp))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.strip_prefix("FIN#TS#") {
             Some(prefix) => prefix.parse().map_err(serde::de::Error::custom),
             None => Err(serde::de::Error::custom("Invalid prefix")),
         }

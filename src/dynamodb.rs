@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusoto_dynamodb::{
     AttributeValue, BatchWriteItemInput, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput,
     PutRequest, QueryInput, WriteRequest,
@@ -22,8 +22,8 @@ fn attr_string(val: String) -> AttributeValue {
     }
 }
 
-fn format_timestamp(timestamp: &DateTime<Utc>) -> String {
-    format!("TS#{:?}", timestamp)
+fn format_timestamp(prefix: &str, timestamp: &DateTime<Utc>) -> String {
+    format!("{}{:?}", prefix, timestamp)
 }
 
 impl Client {
@@ -182,32 +182,26 @@ impl Client {
     pub async fn get_entries<'de, D>(
         &self,
         id: &str,
+        prefix: &str,
         start: Option<&DateTime<Utc>>,
         end: Option<&DateTime<Utc>>,
     ) -> Result<Vec<D>>
     where
         D: Deserialize<'de>,
     {
-        let mut expression = String::new();
+        let expression = "sk BETWEEN :start AND :end";
         let mut params: HashMap<String, AttributeValue> = HashMap::new();
 
-        if let Some(start) = start {
-            expression.push_str(":start <= sk");
-            params.insert(":start".to_owned(), attr_string(format_timestamp(start)));
-        }
+        let start = start
+            .map(|x| format_timestamp(prefix, x))
+            .unwrap_or_else(|| format!("{}1970-01-01T00:00:00Z", prefix));
+        let end = end
+            .map(|x| format_timestamp(prefix, &(*x - Duration::seconds(1))))
+            .unwrap_or_else(|| format!("{}9999-12-31T23:59:59Z", prefix));
 
-        if let Some(end) = end {
-            if !expression.is_empty() {
-                expression.push_str(" AND ")
-            }
-            expression.push_str("sk < :end");
-            params.insert(":end".to_owned(), attr_string(format_timestamp(end)));
-        }
+        params.insert(":start".to_owned(), attr_string(start));
+        params.insert(":end".to_owned(), attr_string(end));
 
-        if expression.is_empty() {
-            self.query(id, None).await
-        } else {
-            self.query(id, Some((&expression, &params))).await
-        }
+        self.query(id, Some((&expression, &params))).await
     }
 }

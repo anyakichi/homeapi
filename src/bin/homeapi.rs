@@ -1,5 +1,5 @@
 use anyhow::Result;
-use juniper::http::GraphQLRequest;
+use async_graphql::Request;
 use lambda_runtime::{error::HandlerError, lambda};
 use once_cell::sync::Lazy;
 use rusoto_core::Region;
@@ -7,25 +7,23 @@ use rusoto_dynamodb::DynamoDbClient;
 use serde::{Deserialize, Serialize};
 
 use homeapi::dynamodb::Client;
-use homeapi::graphql::{schema, Context, Schema};
+use homeapi::graphql::{schema, HomeAPI};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Event {
     body: Option<String>,
 }
 
-static CONTEXT: Lazy<Context> = Lazy::new(|| Context {
-    dynamodb: Client::new(
+static SCHEMA: Lazy<HomeAPI> = Lazy::new(|| {
+    schema(Client::new(
         DynamoDbClient::new(Region::default()),
         std::env::var("TABLE_NAME").unwrap(),
-    ),
+    ))
 });
 
-static SCHEMA: Lazy<Schema> = Lazy::new(|| schema());
-
 async fn handler(event: Event, _context: lambda_runtime::Context) -> Result<String, HandlerError> {
-    let request: GraphQLRequest = serde_json::from_str(&event.body.unwrap())?;
-    let res = request.execute(&SCHEMA, &CONTEXT).await;
+    let req: Request = serde_json::from_str(&event.body.unwrap())?;
+    let res = SCHEMA.execute(req).await;
     Ok(serde_json::to_string(&res)?)
 }
 
