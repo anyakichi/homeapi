@@ -188,7 +188,7 @@ async fn import_appliances(devices: &[Device]) -> Result<()> {
 }
 
 async fn import() -> Result<()> {
-    let devices = DB.get_devices().await?;
+    let (devices, _) = DB.get_items("DEVICE", None, None, None, None, None).await?;
 
     let (res0, res1) = tokio::join!(import_devices(&devices), import_appliances(&devices));
     res0?;

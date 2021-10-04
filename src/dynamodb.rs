@@ -1,14 +1,21 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Duration, Utc};
 use rusoto_dynamodb::{
     AttributeValue, BatchWriteItemInput, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput,
     PutRequest, QueryInput, WriteRequest,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::models::*;
+pub enum Condition {
+    BeginsWith(String),
+    Between(String, String),
+    Eq(String),
+    Ge(String),
+    Gt(String),
+    Le(String),
+    Lt(String),
+}
 
 pub struct Client {
     pub dynamodb: DynamoDbClient,
@@ -20,10 +27,6 @@ fn attr_string(val: String) -> AttributeValue {
         s: Some(val),
         ..Default::default()
     }
-}
-
-fn format_timestamp(prefix: &str, timestamp: &DateTime<Utc>) -> String {
-    format!("{}{:?}", prefix, timestamp)
 }
 
 impl Client {
@@ -59,46 +62,103 @@ impl Client {
         Ok(serde_dynamodb::from_hashmap(result)?)
     }
 
-    pub async fn query<'de, D>(
+    pub async fn get_items<'de, D>(
         &self,
         pk: &str,
-        expression: Option<(&str, &HashMap<String, AttributeValue>)>,
-    ) -> Result<Vec<D>>
+        sk: Option<Condition>,
+        after: Option<String>,
+        before: Option<String>,
+        first: Option<usize>,
+        last: Option<usize>,
+    ) -> Result<(Vec<D>, Option<String>)>
     where
         D: Deserialize<'de>,
     {
-        let (key_condition_expression, expression_attribute_values) = match expression {
-            Some((expression, params)) => {
-                let mut params = params.clone();
-                params.insert(":pk".to_owned(), attr_string(pk.to_string()));
-                (Some(format!("pk = :pk AND ({})", expression)), Some(params))
+        let mut key_condition_expression = "pk = :pk".to_owned();
+        let mut params = HashMap::new();
+        params.insert(":pk".to_owned(), attr_string(pk.to_owned()));
+
+        match sk {
+            Some(Condition::BeginsWith(a)) => {
+                key_condition_expression.push_str(" AND BEGINS_WITH(sk, :a)");
+                params.insert(":a".to_owned(), attr_string(a));
             }
-            None => {
-                let params: HashMap<String, AttributeValue> =
-                    [(":pk".to_string(), attr_string(pk.to_string()))]
-                        .iter()
-                        .cloned()
-                        .collect();
-                (Some("pk = :pk".to_owned()), Some(params))
+            Some(Condition::Between(a, b)) => {
+                key_condition_expression.push_str(" AND sk BETWEEN :a AND :b");
+                params.insert(":a".to_owned(), attr_string(a));
+                params.insert(":b".to_owned(), attr_string(b));
             }
+            Some(Condition::Eq(a)) => {
+                key_condition_expression.push_str(" AND sk = :a");
+                params.insert(":a".to_owned(), attr_string(a));
+            }
+            Some(Condition::Ge(a)) => {
+                key_condition_expression.push_str(" AND sk >= :a");
+                params.insert(":a".to_owned(), attr_string(a));
+            }
+            Some(Condition::Gt(a)) => {
+                key_condition_expression.push_str(" AND sk > :a");
+                params.insert(":a".to_owned(), attr_string(a));
+            }
+            Some(Condition::Le(a)) => {
+                key_condition_expression.push_str(" AND sk <= :a");
+                params.insert(":a".to_owned(), attr_string(a));
+            }
+            Some(Condition::Lt(a)) => {
+                key_condition_expression.push_str(" AND sk < :a");
+                params.insert(":a".to_owned(), attr_string(a));
+            }
+            None => (),
+        }
+
+        let (scan_index_forward, limit, next_sk) = match (first, last) {
+            (None, None) => (None, None, after),
+            (None, Some(last)) => (Some(false), Some(last as i64), before),
+            (Some(first), _) => (None, Some(first as i64), after),
         };
+
+        let exclusive_start_key = next_sk.map(|sk| {
+            [
+                ("pk".to_owned(), attr_string(pk.to_owned())),
+                ("sk".to_owned(), attr_string(sk)),
+            ]
+            .iter()
+            .cloned()
+            .collect()
+        });
 
         let query_input = QueryInput {
             table_name: self.table.clone(),
-            key_condition_expression,
-            expression_attribute_values,
+            key_condition_expression: Some(key_condition_expression),
+            expression_attribute_values: Some(params),
+            scan_index_forward,
+            limit,
+            exclusive_start_key,
             ..Default::default()
         };
 
         let output = self.dynamodb.query(query_input).await?;
-        let result = output
+        let next_sk = output
+            .last_evaluated_key
+            .map(|mut x| x.remove("sk").unwrap().s.unwrap());
+        let mut result = output
             .items
             .unwrap_or_else(Vec::new)
             .into_iter()
             .map(|item| serde_dynamodb::from_hashmap(item).unwrap())
             .collect::<Vec<D>>();
 
-        Ok(result)
+        match (first, last) {
+            (None, Some(_)) => result.reverse(),
+            (Some(first), Some(last)) if first > last => {
+                result.reverse();
+                result.truncate(last);
+                result.reverse()
+            }
+            _ => (),
+        }
+
+        Ok((result, next_sk))
     }
 
     pub async fn get_all_items<'de, D>(&self, query_input: &mut QueryInput) -> Result<Vec<D>>
@@ -169,39 +229,5 @@ impl Client {
         let _res = self.dynamodb.put_item(item).await?;
 
         Ok(())
-    }
-
-    pub async fn get_device(&self, id: &str) -> Result<Device> {
-        self.get_item("DEVICE", id).await
-    }
-
-    pub async fn get_devices(&self) -> Result<Vec<Device>> {
-        self.query("DEVICE", None).await
-    }
-
-    pub async fn get_entries<'de, D>(
-        &self,
-        id: &str,
-        prefix: &str,
-        start: Option<&DateTime<Utc>>,
-        end: Option<&DateTime<Utc>>,
-    ) -> Result<Vec<D>>
-    where
-        D: Deserialize<'de>,
-    {
-        let expression = "sk BETWEEN :start AND :end";
-        let mut params: HashMap<String, AttributeValue> = HashMap::new();
-
-        let start = start
-            .map(|x| format_timestamp(prefix, x))
-            .unwrap_or_else(|| format!("{}1970-01-01T00:00:00Z", prefix));
-        let end = end
-            .map(|x| format_timestamp(prefix, &(*x - Duration::seconds(1))))
-            .unwrap_or_else(|| format!("{}9999-12-31T23:59:59Z", prefix));
-
-        params.insert(":start".to_owned(), attr_string(start));
-        params.insert(":end".to_owned(), attr_string(end));
-
-        self.query(id, Some((&expression, &params))).await
     }
 }

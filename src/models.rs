@@ -3,6 +3,20 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+pub trait DynamoItem {
+    fn sk_prefix() -> String {
+        "".to_owned()
+    }
+
+    fn pk(&self) -> String;
+
+    fn sk_value(&self) -> String;
+
+    fn sk(&self) -> String {
+        format!("{}{}", Self::sk_prefix(), self.sk_value())
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RawData {
     pk: String,
@@ -43,6 +57,16 @@ impl Device {
     }
 }
 
+impl DynamoItem for Device {
+    fn pk(&self) -> String {
+        self.pk.to_owned()
+    }
+
+    fn sk_value(&self) -> String {
+        self.id.to_owned()
+    }
+}
+
 #[Object]
 impl Device {
     async fn id(&self) -> &str {
@@ -74,6 +98,16 @@ impl Place {
     }
 }
 
+impl DynamoItem for Place {
+    fn pk(&self) -> String {
+        self.pk.to_owned()
+    }
+
+    fn sk_value(&self) -> String {
+        self.id.to_owned()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Electricity {
     #[serde(rename = "pk")]
@@ -89,6 +123,20 @@ pub struct Electricity {
     pub cumulative_kwh_p: Decimal,
     pub cumulative_kwh_n: Decimal,
     pub current_w: u32,
+}
+
+impl DynamoItem for Electricity {
+    fn sk_prefix() -> String {
+        "TS#".to_owned()
+    }
+
+    fn pk(&self) -> String {
+        self.id.to_owned()
+    }
+
+    fn sk_value(&self) -> String {
+        format!("{:?}", &self.timestamp)
+    }
 }
 
 #[Object]
@@ -132,6 +180,20 @@ pub struct FinalElectricity {
 
     pub cumulative_kwh_p: Decimal,
     pub cumulative_kwh_n: Decimal,
+}
+
+impl DynamoItem for FinalElectricity {
+    fn sk_prefix() -> String {
+        "FIN#TS#".to_owned()
+    }
+
+    fn pk(&self) -> String {
+        self.id.to_owned()
+    }
+
+    fn sk_value(&self) -> String {
+        format!("{:?}", &self.timestamp)
+    }
 }
 
 #[Object]
@@ -179,6 +241,20 @@ pub struct PlaceCondition {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub motion: Option<i64>,
+}
+
+impl DynamoItem for PlaceCondition {
+    fn sk_prefix() -> String {
+        "TS#".to_owned()
+    }
+
+    fn pk(&self) -> String {
+        self.id.to_owned()
+    }
+
+    fn sk_value(&self) -> String {
+        format!("{:?}", self.timestamp)
+    }
 }
 
 #[Object]
