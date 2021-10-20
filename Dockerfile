@@ -1,4 +1,4 @@
-FROM ghcr.io/anyakichi/lambda-rust-builder:al2 AS builder
+FROM ghcr.io/anyakichi/lambda-rust-builder:al2-rustup AS builder
 
 COPY Cargo.lock Cargo.toml /build/
 COPY src /build/src/
@@ -8,7 +8,7 @@ WORKDIR /build
 USER builder
 RUN cargo build --release
 
-FROM ghcr.io/anyakichi/lambda-rust-builder:al2
+FROM ghcr.io/anyakichi/lambda-rust-builder:al2-rustup
 
 ENV \
   GIT_REPO=https://github.com/anyakichi/homeapi.git
