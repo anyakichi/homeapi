@@ -1,7 +1,37 @@
-use async_graphql::*;
+use anyhow::{bail, Result};
+use async_graphql::{InputObject, Object, ID};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+
+pub struct NodeId {
+    pub prefix: String,
+    pub pk: String,
+    pub sk: String,
+}
+
+impl NodeId {
+    pub fn global_id(prefix: &str, pk: &str, sk: &str) -> ID {
+        base64::encode_config(format!("{}:{}:{}", prefix, pk, sk), base64::STANDARD_NO_PAD).into()
+    }
+
+    pub fn from_global_id(id: ID) -> Result<Self> {
+        let id = String::from_utf8(base64::decode(&*id)?)?;
+        let v: Vec<&str> = id.splitn(2, ':').collect();
+        if v.len() != 3 {
+            bail!("Invalid Node ID");
+        }
+        Ok(Self {
+            prefix: v[0].into(),
+            pk: v[1].into(),
+            sk: v[2].into(),
+        })
+    }
+
+    pub fn to_global_id(&self) -> ID {
+        Self::global_id(&self.prefix, &self.pk, &self.sk)
+    }
+}
 
 pub trait DynamoItem {
     fn sk_prefix() -> String {
@@ -69,8 +99,8 @@ impl DynamoItem for Device {
 
 #[Object]
 impl Device {
-    async fn id(&self) -> &str {
-        self.id.as_str()
+    pub async fn id(&self) -> ID {
+        NodeId::global_id("Device", "DEVICE", &self.id)
     }
 
     async fn place(&self) -> &str {
@@ -108,10 +138,43 @@ impl DynamoItem for Place {
     }
 }
 
+#[Object]
+impl Place {
+    pub async fn id(&self) -> ID {
+        NodeId::global_id("Place", "PLACE", &self.id)
+    }
+
+    async fn name(&self) -> &str {
+        self.name.as_str()
+    }
+}
+
+#[derive(Debug, Serialize, InputObject)]
+pub struct ElectricityInput {
+    #[serde(rename = "pk")]
+    pub device: String,
+
+    #[serde(rename = "sk")]
+    #[serde(with = "dynamodb_timestamp")]
+    pub timestamp: DateTime<Utc>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_kwh_p: Option<Decimal>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_kwh_n: Option<Decimal>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_w: Option<u32>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Electricity {
     #[serde(rename = "pk")]
-    pub id: String,
+    pub device: String,
 
     #[serde(rename = "sk")]
     #[serde(with = "dynamodb_timestamp")]
@@ -131,7 +194,7 @@ impl DynamoItem for Electricity {
     }
 
     fn pk(&self) -> String {
-        self.id.to_owned()
+        self.device.to_owned()
     }
 
     fn sk_value(&self) -> String {
@@ -141,8 +204,16 @@ impl DynamoItem for Electricity {
 
 #[Object]
 impl Electricity {
-    async fn id(&self) -> &str {
-        self.id.as_str()
+    pub async fn id(&self) -> ID {
+        NodeId::global_id(
+            "Electricity",
+            &self.device,
+            &format!("{:?}", &self.timestamp),
+        )
+    }
+
+    async fn device(&self) -> &str {
+        self.device.as_str()
     }
 
     async fn timestamp(&self) -> String {
@@ -166,10 +237,29 @@ impl Electricity {
     }
 }
 
+#[derive(Debug, Serialize, InputObject)]
+pub struct FinalElectricityInput {
+    #[serde(rename = "pk")]
+    pub device: String,
+
+    #[serde(rename = "sk")]
+    #[serde(with = "dynamodb_timestamp")]
+    pub timestamp: DateTime<Utc>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_kwh_p: Option<Decimal>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cumulative_kwh_n: Option<Decimal>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FinalElectricity {
     #[serde(rename = "pk")]
-    pub id: String,
+    pub device: String,
 
     #[serde(rename = "sk")]
     #[serde(with = "dynamodb_fin_ts")]
@@ -188,7 +278,7 @@ impl DynamoItem for FinalElectricity {
     }
 
     fn pk(&self) -> String {
-        self.id.to_owned()
+        self.device.to_owned()
     }
 
     fn sk_value(&self) -> String {
@@ -198,8 +288,16 @@ impl DynamoItem for FinalElectricity {
 
 #[Object]
 impl FinalElectricity {
-    async fn id(&self) -> &str {
-        self.id.as_str()
+    pub async fn id(&self) -> ID {
+        NodeId::global_id(
+            "FinalElectricity",
+            &self.device,
+            &format!("{:?}", &self.timestamp),
+        )
+    }
+
+    async fn device(&self) -> &str {
+        self.device.as_str()
     }
 
     async fn timestamp(&self) -> String {
@@ -219,10 +317,35 @@ impl FinalElectricity {
     }
 }
 
+#[derive(Debug, Serialize, InputObject)]
+pub struct PlaceConditionInput {
+    #[serde(rename = "pk")]
+    pub device: String,
+
+    #[serde(rename = "sk")]
+    #[serde(with = "dynamodb_timestamp")]
+    pub timestamp: DateTime<Utc>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<Decimal>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub humidity: Option<i64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub illuminance: Option<i64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motion: Option<i64>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlaceCondition {
     #[serde(rename = "pk")]
-    pub id: String,
+    pub device: String,
 
     #[serde(rename = "sk")]
     #[serde(with = "dynamodb_timestamp")]
@@ -231,7 +354,7 @@ pub struct PlaceCondition {
     pub place: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
+    pub temperature: Option<Decimal>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub humidity: Option<i64>,
@@ -249,7 +372,7 @@ impl DynamoItem for PlaceCondition {
     }
 
     fn pk(&self) -> String {
-        self.id.to_owned()
+        self.device.to_owned()
     }
 
     fn sk_value(&self) -> String {
@@ -259,8 +382,16 @@ impl DynamoItem for PlaceCondition {
 
 #[Object]
 impl PlaceCondition {
-    async fn id(&self) -> &str {
-        self.id.as_str()
+    pub async fn id(&self) -> ID {
+        NodeId::global_id(
+            "PlaceCondition",
+            &self.device,
+            &format!("{:?}", &self.timestamp),
+        )
+    }
+
+    async fn device(&self) -> &str {
+        self.device.as_str()
     }
 
     async fn timestamp(&self) -> String {

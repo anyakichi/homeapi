@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use rusoto_dynamodb::{
     AttributeValue, BatchWriteItemInput, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput,
-    PutRequest, QueryInput, WriteRequest,
+    PutRequest, QueryInput, UpdateItemInput, WriteRequest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,13 +34,13 @@ impl Client {
         Self { dynamodb, table }
     }
 
-    pub async fn get_item<'de, D>(&self, pk: &str, sk: &str) -> Result<D>
+    pub async fn get_item<'de, D>(&self, pk: impl Into<String>, sk: impl Into<String>) -> Result<D>
     where
         D: Deserialize<'de>,
     {
         let key: HashMap<String, AttributeValue> = [
-            ("pk".to_owned(), attr_string(pk.to_string())),
-            ("sk".to_owned(), attr_string(sk.to_string())),
+            ("pk".into(), attr_string(pk.into())),
+            ("sk".into(), attr_string(sk.into())),
         ]
         .iter()
         .cloned()
@@ -229,5 +229,59 @@ impl Client {
         let _res = self.dynamodb.put_item(item).await?;
 
         Ok(())
+    }
+
+    pub async fn update_item<'de, D, S>(&self, item: &S) -> Result<D>
+    where
+        D: Deserialize<'de>,
+        S: Serialize,
+    {
+        let mut key = HashMap::new();
+        let mut attrs = serde_dynamodb::to_hashmap(item)?;
+
+        key.insert(
+            "pk".to_owned(),
+            attrs.remove("pk").ok_or(anyhow!("missing pk"))?,
+        );
+        key.insert(
+            "sk".to_owned(),
+            attrs.remove("sk").ok_or(anyhow!("missing sk"))?,
+        );
+
+        let expression_attribute_names = Some(
+            attrs
+                .keys()
+                .map(|x| (format!("#{}", x), x.to_owned()))
+                .collect(),
+        );
+        let expression_attribute_values = Some(
+            attrs
+                .iter()
+                .map(|(k, v)| (format!(":{}", k), v.to_owned()))
+                .collect(),
+        );
+        let update_expression = Some(format!(
+            "SET {}",
+            attrs
+                .keys()
+                .map(|x| format!("#{} = :{}", x, x))
+                .collect::<Vec<String>>()
+                .join(",")
+        ));
+
+        let input = UpdateItemInput {
+            condition_expression: Some("attribute_exists(pk)".to_owned()),
+            expression_attribute_names,
+            expression_attribute_values,
+            key,
+            return_values: Some("ALL_NEW".to_owned()),
+            table_name: self.table.clone(),
+            update_expression,
+            ..Default::default()
+        };
+
+        let res = self.dynamodb.update_item(input).await?;
+
+        Ok(serde_dynamodb::from_hashmap(res.attributes.unwrap())?)
     }
 }

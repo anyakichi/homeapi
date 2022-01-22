@@ -2,14 +2,15 @@
 name = "homeapi"
 version = "0.1.0"
 authors = ["INAJIMA Daisuke <inajima@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0"
-async-graphql = "2.0"
-async-graphql-warp = "2.0"
+async-graphql = { version = "3.0", features = ["chrono", "decimal"] }
+async-graphql-warp = "3.0"
+base64 = "0.13.0"
 chrono = { version = "0.4", features = ["serde"] }
 env_logger = "0.8"
 futures = "0.3"

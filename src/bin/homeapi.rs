@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql_warp::{BadRequest, Response};
+use async_graphql_warp::{GraphQLBadRequest, GraphQLResponse};
 use http::StatusCode;
 use once_cell::sync::Lazy;
 use rusoto_core::Region;
@@ -24,7 +24,7 @@ async fn main() {
 
     let graphql_post = async_graphql_warp::graphql(SCHEMA.clone()).and_then(
         |(schema, request): (HomeAPI, async_graphql::Request)| async move {
-            Ok::<_, Infallible>(Response::from(schema.execute(request).await))
+            Ok::<_, Infallible>(GraphQLResponse::from(schema.execute(request).await))
         },
     );
 
@@ -37,7 +37,7 @@ async fn main() {
     let routes = graphql_playbround
         .or(graphql_post)
         .recover(|err: Rejection| async move {
-            if let Some(BadRequest(err)) = err.find() {
+            if let Some(GraphQLBadRequest(err)) = err.find() {
                 return Ok::<_, Infallible>(warp::reply::with_status(
                     err.to_string(),
                     StatusCode::BAD_REQUEST,

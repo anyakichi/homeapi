@@ -26,7 +26,7 @@ struct NewestEvents {
     hu: Option<Event<i64>>,
     il: Option<Event<i64>>,
     mo: Option<Event<i64>>,
-    te: Option<Event<f64>>,
+    te: Option<Event<Decimal>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -119,7 +119,7 @@ async fn import_devices(devices: &[Device]) -> Result<()> {
 
         if let Some(timestamp) = datetime {
             let entry = PlaceCondition {
-                id: entry.id.to_string(),
+                device: entry.id.to_string(),
                 timestamp,
                 place,
                 temperature: newest_events.te.as_ref().map(|x| x.val),
@@ -172,7 +172,7 @@ async fn import_appliances(devices: &[Device]) -> Result<()> {
             let current_w = *epcs.get(&231).unwrap_or(&0);
 
             items.push(Electricity {
-                id: entry.device.id.to_string(),
+                device: entry.device.id.to_string(),
                 timestamp,
                 place,
                 cumulative_kwh_p,
