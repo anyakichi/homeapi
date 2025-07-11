@@ -183,9 +183,9 @@ pub struct Electricity {
     #[serde(default)]
     pub place: String,
 
-    pub cumulative_kwh_p: Decimal,
-    pub cumulative_kwh_n: Decimal,
-    pub current_w: u32,
+    pub cumulative_kwh_p: Option<Decimal>,
+    pub cumulative_kwh_n: Option<Decimal>,
+    pub current_w: Option<u32>,
 }
 
 impl DynamoItem for Electricity {
@@ -224,16 +224,16 @@ impl Electricity {
         self.place.as_str()
     }
 
-    async fn cumulative_kwh_p(&self) -> String {
-        format!("{}", &self.cumulative_kwh_p)
+    async fn cumulative_kwh_p(&self) -> Option<String> {
+        self.cumulative_kwh_p.map(|x| format!("{}", x))
     }
 
-    async fn cumulative_kwh_n(&self) -> String {
-        format!("{}", &self.cumulative_kwh_n)
+    async fn cumulative_kwh_n(&self) -> Option<String> {
+        self.cumulative_kwh_n.map(|x| format!("{}", x))
     }
 
-    async fn current_w(&self) -> String {
-        format!("{}", &self.current_w)
+    async fn current_w(&self) -> Option<String> {
+        self.current_w.map(|x| format!("{}", x))
     }
 }
 

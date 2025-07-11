@@ -166,10 +166,10 @@ async fn import_appliances(devices: &[Device]) -> Result<()> {
             let coeff: Decimal = Decimal::from_u32(*epcs.get(&211).unwrap_or(&1)).unwrap()
                 * parse_epc225(*epcs.get(&225).unwrap_or(&0));
             let cumulative_kwh_p =
-                coeff * Decimal::from_u32(*epcs.get(&224).unwrap_or(&0)).unwrap();
+                Some(coeff * Decimal::from_u32(*epcs.get(&224).unwrap_or(&0)).unwrap());
             let cumulative_kwh_n =
-                coeff * Decimal::from_u32(*epcs.get(&227).unwrap_or(&0)).unwrap();
-            let current_w = *epcs.get(&231).unwrap_or(&0);
+                Some(coeff * Decimal::from_u32(*epcs.get(&227).unwrap_or(&0)).unwrap());
+            let current_w = Some(*epcs.get(&231).unwrap_or(&0));
 
             items.push(Electricity {
                 device: entry.device.id.to_string(),
@@ -190,9 +190,12 @@ async fn import_appliances(devices: &[Device]) -> Result<()> {
 async fn import() -> Result<()> {
     let (devices, _) = DB.get_items("DEVICE", None, None, None, None, None).await?;
 
+    /*
     let (res0, res1) = tokio::join!(import_devices(&devices), import_appliances(&devices));
     res0?;
     res1?;
+    */
+    import_devices(&devices).await?;
 
     Ok(())
 }

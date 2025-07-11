@@ -65,9 +65,9 @@ fn electricity(input: ElectricityInput) -> Electricity {
         device: input.device,
         timestamp: input.timestamp,
         place: input.place.unwrap_or("".to_owned()),
-        cumulative_kwh_p: input.cumulative_kwh_p.unwrap_or(dec!(0.0)),
-        cumulative_kwh_n: input.cumulative_kwh_n.unwrap_or(dec!(0.0)),
-        current_w: input.current_w.unwrap_or(0) as u32,
+        cumulative_kwh_p: input.cumulative_kwh_p,
+        cumulative_kwh_n: input.cumulative_kwh_n,
+        current_w: input.current_w,
     }
 }
 

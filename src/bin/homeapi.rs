@@ -1,5 +1,8 @@
 use std::convert::Infallible;
+use std::net::IpAddr;
+use std::str::FromStr;
 
+use anyhow::Result;
 use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
 use async_graphql_warp::{GraphQLBadRequest, GraphQLResponse};
 use http::StatusCode;
@@ -19,7 +22,7 @@ static SCHEMA: Lazy<HomeAPI> = Lazy::new(|| {
 });
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     env_logger::init();
 
     let graphql_post = async_graphql_warp::graphql(SCHEMA.clone()).and_then(
@@ -48,5 +51,6 @@ async fn main() {
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
         });
-    warp::serve(routes).run(([0, 0, 0, 0], 8080)).await
+    warp::serve(routes).run((IpAddr::from_str("::0")?, 8080)).await;
+    Ok(())
 }
