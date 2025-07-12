@@ -3,7 +3,7 @@ use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
 
 use homeapi::dynamodb::Client;
-use homeapi::graphql::{HomeAPI, schema};
+use homeapi::graphql::{HomeAPI, PubSub, schema};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Event {
@@ -20,7 +20,8 @@ async fn get_schema() -> Result<HomeAPI, Error> {
             std::process::exit(1);
         }
     };
-    Ok(schema(Client::new(dynamodb, table_name)))
+    let pubsub = PubSub::new();
+    Ok(schema(Client::new(dynamodb, table_name), pubsub))
 }
 
 async fn function_handler(event: LambdaEvent<Event>) -> Result<String, Error> {

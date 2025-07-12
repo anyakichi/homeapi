@@ -1,8 +1,11 @@
 use async_graphql::connection::{Connection, CursorType, Edge, EmptyFields, query};
-use async_graphql::{Context, EmptySubscription, Error, ID, Interface, Object, Result, Schema};
+use async_graphql::{Context, Error, ID, Interface, Object, Result, Schema, Subscription};
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use futures_util::{Stream, StreamExt};
 use rust_decimal_macros::dec;
 use serde::Deserialize;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::dynamodb::{Client, Condition};
 use crate::models::{
@@ -223,8 +226,10 @@ impl Mutation {
         input: ElectricityInput,
     ) -> Result<Electricity> {
         let dynamodb = &ctx.data_unchecked::<Client>();
+        let pubsub = &ctx.data_unchecked::<PubSub>();
         let new = electricity(input);
         dynamodb.put_item(&new).await?;
+        pubsub.publish_electricity(new.clone());
         Ok(new)
     }
 
@@ -234,8 +239,10 @@ impl Mutation {
         input: FinalElectricityInput,
     ) -> Result<FinalElectricity> {
         let dynamodb = &ctx.data_unchecked::<Client>();
+        let pubsub = &ctx.data_unchecked::<PubSub>();
         let new = final_electricity(input);
         dynamodb.put_item(&new).await?;
+        pubsub.publish_final_electricity(new.clone());
         Ok(new)
     }
 
@@ -245,8 +252,10 @@ impl Mutation {
         input: PlaceConditionInput,
     ) -> Result<PlaceCondition> {
         let dynamodb = &ctx.data_unchecked::<Client>();
+        let pubsub = &ctx.data_unchecked::<PubSub>();
         let new = place_condition(input);
         dynamodb.put_item(&new).await?;
+        pubsub.publish_place_condition(new.clone());
         Ok(new)
     }
 
@@ -256,7 +265,9 @@ impl Mutation {
         input: ElectricityInput,
     ) -> Result<Electricity> {
         let dynamodb = &ctx.data_unchecked::<Client>();
-        let new = dynamodb.update_item(&input).await?;
+        let pubsub = &ctx.data_unchecked::<PubSub>();
+        let new: Electricity = dynamodb.update_item(&input).await?;
+        pubsub.publish_electricity(new.clone());
         Ok(new)
     }
 
@@ -266,7 +277,9 @@ impl Mutation {
         input: FinalElectricityInput,
     ) -> Result<FinalElectricity> {
         let dynamodb = &ctx.data_unchecked::<Client>();
-        let new = dynamodb.update_item(&input).await?;
+        let pubsub = &ctx.data_unchecked::<PubSub>();
+        let new: FinalElectricity = dynamodb.update_item(&input).await?;
+        pubsub.publish_final_electricity(new.clone());
         Ok(new)
     }
 
@@ -276,15 +289,153 @@ impl Mutation {
         input: PlaceConditionInput,
     ) -> Result<PlaceCondition> {
         let dynamodb = &ctx.data_unchecked::<Client>();
-        let new = dynamodb.update_item(&input).await?;
+        let pubsub = &ctx.data_unchecked::<PubSub>();
+        let new: PlaceCondition = dynamodb.update_item(&input).await?;
+        pubsub.publish_place_condition(new.clone());
         Ok(new)
     }
 }
 
-pub type HomeAPI = Schema<Query, Mutation, EmptySubscription>;
+#[derive(Clone)]
+pub struct PubSub {
+    electricity_sender: broadcast::Sender<Electricity>,
+    final_electricity_sender: broadcast::Sender<FinalElectricity>,
+    place_condition_sender: broadcast::Sender<PlaceCondition>,
+}
 
-pub fn schema(dynamodb: Client) -> HomeAPI {
-    Schema::build(Query, Mutation, EmptySubscription)
+impl PubSub {
+    pub fn new() -> Self {
+        let (electricity_sender, _) = broadcast::channel(100);
+        let (final_electricity_sender, _) = broadcast::channel(100);
+        let (place_condition_sender, _) = broadcast::channel(100);
+
+        Self {
+            electricity_sender,
+            final_electricity_sender,
+            place_condition_sender,
+        }
+    }
+
+    pub fn publish_electricity(&self, electricity: Electricity) {
+        let _ = self.electricity_sender.send(electricity);
+    }
+
+    pub fn publish_final_electricity(&self, final_electricity: FinalElectricity) {
+        let _ = self.final_electricity_sender.send(final_electricity);
+    }
+
+    pub fn publish_place_condition(&self, place_condition: PlaceCondition) {
+        let _ = self.place_condition_sender.send(place_condition);
+    }
+
+    pub fn subscribe_electricity(&self) -> BroadcastStream<Electricity> {
+        BroadcastStream::new(self.electricity_sender.subscribe())
+    }
+
+    pub fn subscribe_final_electricity(&self) -> BroadcastStream<FinalElectricity> {
+        BroadcastStream::new(self.final_electricity_sender.subscribe())
+    }
+
+    pub fn subscribe_place_condition(&self) -> BroadcastStream<PlaceCondition> {
+        BroadcastStream::new(self.place_condition_sender.subscribe())
+    }
+}
+
+pub struct Subscription;
+
+#[Subscription]
+impl Subscription {
+    async fn electricity_updated(
+        &self,
+        ctx: &Context<'_>,
+        device: Option<String>,
+    ) -> impl Stream<Item = Electricity> {
+        let pubsub = ctx.data_unchecked::<PubSub>();
+        pubsub.subscribe_electricity().filter_map(move |result| {
+            let device = device.clone();
+            async move {
+                match result {
+                    Ok(electricity) => {
+                        if let Some(ref d) = device {
+                            if electricity.device == *d {
+                                Some(electricity)
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(electricity)
+                        }
+                    }
+                    Err(_) => None,
+                }
+            }
+        })
+    }
+
+    async fn final_electricity_updated(
+        &self,
+        ctx: &Context<'_>,
+        device: Option<String>,
+    ) -> impl Stream<Item = FinalElectricity> {
+        let pubsub = ctx.data_unchecked::<PubSub>();
+        pubsub
+            .subscribe_final_electricity()
+            .filter_map(move |result| {
+                let device = device.clone();
+                async move {
+                    match result {
+                        Ok(final_electricity) => {
+                            if let Some(ref d) = device {
+                                if final_electricity.device == *d {
+                                    Some(final_electricity)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                Some(final_electricity)
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                }
+            })
+    }
+
+    async fn place_condition_updated(
+        &self,
+        ctx: &Context<'_>,
+        device: Option<String>,
+    ) -> impl Stream<Item = PlaceCondition> {
+        let pubsub = ctx.data_unchecked::<PubSub>();
+        pubsub
+            .subscribe_place_condition()
+            .filter_map(move |result| {
+                let device = device.clone();
+                async move {
+                    match result {
+                        Ok(place_condition) => {
+                            if let Some(ref d) = device {
+                                if place_condition.device == *d {
+                                    Some(place_condition)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                Some(place_condition)
+                            }
+                        }
+                        Err(_) => None,
+                    }
+                }
+            })
+    }
+}
+
+pub type HomeAPI = Schema<Query, Mutation, Subscription>;
+
+pub fn schema(dynamodb: Client, pubsub: PubSub) -> HomeAPI {
+    Schema::build(Query, Mutation, Subscription)
         .data(dynamodb)
+        .data(pubsub)
         .finish()
 }

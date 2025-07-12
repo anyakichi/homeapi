@@ -1357,6 +1357,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "env_logger",
+ "futures-util",
  "lambda_runtime",
  "reqwest",
  "rust_decimal",
@@ -1365,6 +1366,7 @@ dependencies = [
  "serde_dynamo",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tower",
  "tower-http",
 ]
@@ -3194,6 +3196,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

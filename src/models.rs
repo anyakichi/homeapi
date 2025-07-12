@@ -174,7 +174,7 @@ pub struct ElectricityInput {
     pub current_w: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Electricity {
     #[serde(rename = "pk")]
     pub device: String,
@@ -259,7 +259,7 @@ pub struct FinalElectricityInput {
     pub cumulative_kwh_n: Option<Decimal>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinalElectricity {
     #[serde(rename = "pk")]
     pub device: String,
@@ -345,7 +345,7 @@ pub struct PlaceConditionInput {
     pub motion: Option<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaceCondition {
     #[serde(rename = "pk")]
     pub device: String,
