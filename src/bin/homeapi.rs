@@ -1,56 +1,50 @@
-use std::convert::Infallible;
-use std::net::IpAddr;
-use std::str::FromStr;
+use std::net::SocketAddr;
 
 use anyhow::Result;
-use async_graphql::http::{playground_source, GraphQLPlaygroundConfig};
-use async_graphql_warp::{GraphQLBadRequest, GraphQLResponse};
-use http::StatusCode;
-use once_cell::sync::Lazy;
-use rusoto_core::Region;
-use rusoto_dynamodb::DynamoDbClient;
-use warp::{http::Response as HttpResponse, Filter, Rejection};
+use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use axum::{
+    Router,
+    extract::State,
+    response::{Html, IntoResponse},
+    routing::get,
+};
+use tower_http::trace::TraceLayer;
 
 use homeapi::dynamodb::Client;
-use homeapi::graphql::{schema, HomeAPI};
+use homeapi::graphql::{HomeAPI, schema};
 
-static SCHEMA: Lazy<HomeAPI> = Lazy::new(|| {
-    schema(Client::new(
-        DynamoDbClient::new(Region::default()),
-        std::env::var("TABLE_NAME").unwrap(),
-    ))
-});
+async fn create_schema() -> HomeAPI {
+    let config = aws_config::load_defaults(aws_config::BehaviorVersion::v2025_01_17()).await;
+    let dynamodb = aws_sdk_dynamodb::Client::new(&config);
+    schema(Client::new(dynamodb, std::env::var("TABLE_NAME").unwrap()))
+}
+
+async fn graphql_handler(State(schema): State<HomeAPI>, req: GraphQLRequest) -> GraphQLResponse {
+    schema.execute(req.into_inner()).await.into()
+}
+
+async fn graphql_playground() -> impl IntoResponse {
+    Html(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let graphql_post = async_graphql_warp::graphql(SCHEMA.clone()).and_then(
-        |(schema, request): (HomeAPI, async_graphql::Request)| async move {
-            Ok::<_, Infallible>(GraphQLResponse::from(schema.execute(request).await))
-        },
-    );
+    let schema = create_schema().await;
 
-    let graphql_playbround = warp::path::end().and(warp::get()).map(|| {
-        HttpResponse::builder()
-            .header("content-type", "text/html")
-            .body(playground_source(GraphQLPlaygroundConfig::new("/")))
-    });
+    let app = Router::new()
+        .route("/", get(graphql_playground))
+        .route("/graphql", get(graphql_playground).post(graphql_handler))
+        .layer(TraceLayer::new_for_http())
+        .with_state(schema);
 
-    let routes = graphql_playbround
-        .or(graphql_post)
-        .recover(|err: Rejection| async move {
-            if let Some(GraphQLBadRequest(err)) = err.find() {
-                return Ok::<_, Infallible>(warp::reply::with_status(
-                    err.to_string(),
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
-            Ok(warp::reply::with_status(
-                "INTERNAL_SERVER_ERROR".to_string(),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ))
-        });
-    warp::serve(routes).run((IpAddr::from_str("::0")?, 8080)).await;
+    let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 8080));
+    println!("GraphQL playground: http://{}", addr);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
     Ok(())
 }

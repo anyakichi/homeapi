@@ -1,5 +1,5 @@
-use async_graphql::connection::{query, Connection, Edge, EmptyFields};
-use async_graphql::{Context, EmptySubscription, Error, Interface, Object, Result, Schema, ID};
+use async_graphql::connection::{Connection, CursorType, Edge, EmptyFields, query};
+use async_graphql::{Context, EmptySubscription, Error, ID, Interface, Object, Result, Schema};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal_macros::dec;
 use serde::Deserialize;
@@ -16,9 +16,9 @@ fn sk_time(prefix: &str, time: Option<String>, after: bool) -> Result<String> {
         Some(x) => DateTime::parse_from_rfc3339(&x)?.with_timezone(&Utc) + Duration::seconds(delta),
         None => {
             if after {
-                Utc.ymd(0, 1, 1).and_hms(0, 0, 0)
+                Utc.with_ymd_and_hms(1, 1, 1, 0, 0, 0).unwrap()
             } else {
-                Utc.ymd(9999, 12, 31).and_hms(23, 59, 59)
+                Utc.with_ymd_and_hms(9999, 12, 31, 23, 59, 59).unwrap()
             }
         }
     };
@@ -36,7 +36,8 @@ async fn get_items<'de, D>(
     last: Option<i32>,
 ) -> Result<Connection<String, D, EmptyFields, EmptyFields>>
 where
-    D: Deserialize<'de> + DynamoItem,
+    D: Deserialize<'de> + DynamoItem + async_graphql::OutputType,
+    String: CursorType,
 {
     query(
         after,
@@ -53,7 +54,9 @@ where
             let has_prev = has_after || (last.is_some() && next.is_some());
             let has_next = has_before || (first.is_some() && next.is_some());
             let mut connection = Connection::new(has_prev, has_next);
-            connection.append(items.into_iter().map(|x| Edge::new(x.sk_value(), x)));
+            connection
+                .edges
+                .extend(items.into_iter().map(|x| Edge::new(x.sk_value(), x)));
             Ok::<_, Error>(connection)
         },
     )
@@ -94,7 +97,7 @@ fn place_condition(input: PlaceConditionInput) -> PlaceCondition {
 }
 
 #[derive(Interface)]
-#[graphql(field(name = "id", type = "ID"))]
+#[graphql(field(name = "id", desc = "The ID of the node", ty = "ID"))]
 pub enum Node {
     Device(Device),
     Electricity(Electricity),

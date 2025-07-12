@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
-use rusoto_dynamodb::{
-    AttributeValue, BatchWriteItemInput, DynamoDb, DynamoDbClient, GetItemInput, PutItemInput,
-    PutRequest, QueryInput, UpdateItemInput, WriteRequest,
+use anyhow::{Result, anyhow};
+use aws_sdk_dynamodb::{
+    Client as DynamoDbClient,
+    types::{AttributeValue, PutRequest, ReturnValue, WriteRequest},
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone)]
 pub enum Condition {
     BeginsWith(String),
     Between(String, String),
@@ -23,10 +24,7 @@ pub struct Client {
 }
 
 fn attr_string(val: String) -> AttributeValue {
-    AttributeValue {
-        s: Some(val),
-        ..Default::default()
-    }
+    AttributeValue::S(val)
 }
 
 impl Client {
@@ -46,20 +44,17 @@ impl Client {
         .cloned()
         .collect();
 
-        let input = GetItemInput {
-            table_name: self.table.clone(),
-            key,
-            ..Default::default()
-        };
-
         let result = self
             .dynamodb
-            .get_item(input)
+            .get_item()
+            .table_name(&self.table)
+            .set_key(Some(key))
+            .send()
             .await?
             .item
             .ok_or_else(|| anyhow!("no item"))?;
 
-        Ok(serde_dynamodb::from_hashmap(result)?)
+        Ok(serde_dynamo::from_item(result)?)
     }
 
     pub async fn get_items<'de, D>(
@@ -127,25 +122,29 @@ impl Client {
             .collect()
         });
 
-        let query_input = QueryInput {
-            table_name: self.table.clone(),
-            key_condition_expression: Some(key_condition_expression),
-            expression_attribute_values: Some(params),
-            scan_index_forward,
-            limit,
-            exclusive_start_key,
-            ..Default::default()
-        };
-
-        let output = self.dynamodb.query(query_input).await?;
+        let output = self
+            .dynamodb
+            .query()
+            .table_name(&self.table)
+            .key_condition_expression(key_condition_expression)
+            .set_expression_attribute_values(Some(params))
+            .set_scan_index_forward(scan_index_forward)
+            .set_limit(limit.map(|l| l as i32))
+            .set_exclusive_start_key(exclusive_start_key)
+            .send()
+            .await?;
         let next_sk = output
             .last_evaluated_key
-            .map(|mut x| x.remove("sk").unwrap().s.unwrap());
+            .and_then(|mut x| x.remove("sk"))
+            .and_then(|attr| match attr {
+                AttributeValue::S(s) => Some(s),
+                _ => None,
+            });
         let mut result = output
             .items
             .unwrap_or_else(Vec::new)
             .into_iter()
-            .map(|item| serde_dynamodb::from_hashmap(item).unwrap())
+            .map(|item| serde_dynamo::from_item(item).unwrap())
             .collect::<Vec<D>>();
 
         match (first, last) {
@@ -161,45 +160,52 @@ impl Client {
         Ok((result, next_sk))
     }
 
-    pub async fn get_all_items<'de, D>(&self, query_input: &mut QueryInput) -> Result<Vec<D>>
+    pub async fn get_all_items<'de, D>(
+        &self,
+        pk: &str,
+        sk_condition: Option<Condition>,
+    ) -> Result<Vec<D>>
     where
         D: Deserialize<'de>,
     {
+        let mut all_items = Vec::new();
+        let mut next_token = None;
+
         loop {
-            let output = self.dynamodb.query(query_input.clone()).await?;
-            let result = output
-                .items
-                .unwrap_or_else(Vec::new)
-                .into_iter()
-                .map(|item| serde_dynamodb::from_hashmap(item).unwrap())
-                .collect::<Vec<D>>();
+            let (items, token) = self
+                .get_items(pk, sk_condition.clone(), next_token, None, None, None)
+                .await?;
 
-            if output.last_evaluated_key == None {
-                return Ok(result);
+            all_items.extend(items);
+
+            match token {
+                Some(t) => next_token = Some(t),
+                None => break,
             }
-
-            query_input.exclusive_start_key = output.last_evaluated_key;
         }
+
+        Ok(all_items)
     }
 
     pub async fn batch_put_items(&self, items: Vec<HashMap<String, AttributeValue>>) -> Result<()> {
         let items = items
             .into_iter()
-            .map(|item| WriteRequest {
-                put_request: Some(PutRequest { item }),
-                ..Default::default()
+            .map(|item| {
+                WriteRequest::builder()
+                    .put_request(PutRequest::builder().set_item(Some(item)).build().unwrap())
+                    .build()
             })
             .collect();
 
         let mut request_items = HashMap::new();
         request_items.insert(self.table.clone(), items);
 
-        let input = BatchWriteItemInput {
-            request_items,
-            ..Default::default()
-        };
-
-        let _res = self.dynamodb.batch_write_item(input).await?;
+        let _res = self
+            .dynamodb
+            .batch_write_item()
+            .set_request_items(Some(request_items))
+            .send()
+            .await?;
 
         Ok(())
     }
@@ -210,7 +216,7 @@ impl Client {
     {
         let items = items
             .iter()
-            .map(|x| serde_dynamodb::to_hashmap(x))
+            .map(|x| serde_dynamo::to_item(x))
             .collect::<Result<Vec<_>, _>>()?;
         let _res = self.batch_put_items(items).await?;
 
@@ -221,12 +227,13 @@ impl Client {
     where
         S: Serialize,
     {
-        let item = PutItemInput {
-            item: serde_dynamodb::to_hashmap(item)?,
-            table_name: self.table.clone(),
-            ..Default::default()
-        };
-        let _res = self.dynamodb.put_item(item).await?;
+        let _res = self
+            .dynamodb
+            .put_item()
+            .table_name(&self.table)
+            .set_item(Some(serde_dynamo::to_item(item)?))
+            .send()
+            .await?;
 
         Ok(())
     }
@@ -237,7 +244,7 @@ impl Client {
         S: Serialize,
     {
         let mut key = HashMap::new();
-        let mut attrs = serde_dynamodb::to_hashmap(item)?;
+        let mut attrs: HashMap<String, AttributeValue> = serde_dynamo::to_item(item)?;
 
         key.insert(
             "pk".to_owned(),
@@ -269,19 +276,19 @@ impl Client {
                 .join(",")
         ));
 
-        let input = UpdateItemInput {
-            condition_expression: Some("attribute_exists(pk)".to_owned()),
-            expression_attribute_names,
-            expression_attribute_values,
-            key,
-            return_values: Some("ALL_NEW".to_owned()),
-            table_name: self.table.clone(),
-            update_expression,
-            ..Default::default()
-        };
+        let res = self
+            .dynamodb
+            .update_item()
+            .table_name(&self.table)
+            .set_key(Some(key))
+            .condition_expression("attribute_exists(pk)")
+            .set_expression_attribute_names(expression_attribute_names)
+            .set_expression_attribute_values(expression_attribute_values)
+            .set_update_expression(update_expression)
+            .return_values(ReturnValue::AllNew)
+            .send()
+            .await?;
 
-        let res = self.dynamodb.update_item(input).await?;
-
-        Ok(serde_dynamodb::from_hashmap(res.attributes.unwrap())?)
+        Ok(serde_dynamo::from_item(res.attributes.unwrap())?)
     }
 }

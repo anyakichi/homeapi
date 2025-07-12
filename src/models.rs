@@ -1,5 +1,6 @@
-use anyhow::{bail, Result};
-use async_graphql::{InputObject, Object, ID};
+use anyhow::{Result, bail};
+use async_graphql::{ID, InputObject, Object};
+use base64::prelude::*;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -12,12 +13,14 @@ pub struct NodeId {
 
 impl NodeId {
     pub fn global_id(prefix: &str, pk: &str, sk: &str) -> ID {
-        base64::encode_config(format!("{}:{}:{}", prefix, pk, sk), base64::STANDARD_NO_PAD).into()
+        BASE64_STANDARD_NO_PAD
+            .encode(format!("{}:{}:{}", prefix, pk, sk))
+            .into()
     }
 
     pub fn from_global_id(id: ID) -> Result<Self> {
-        let id = String::from_utf8(base64::decode(&*id)?)?;
-        let v: Vec<&str> = id.splitn(2, ':').collect();
+        let id = String::from_utf8(BASE64_STANDARD_NO_PAD.decode(&*id)?)?;
+        let v: Vec<&str> = id.splitn(3, ':').collect();
         if v.len() != 3 {
             bail!("Invalid Node ID");
         }

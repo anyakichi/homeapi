@@ -34,6 +34,7 @@ export TABLE_NAME=your-dynamodb-table-name
 cargo run --bin homeapi
 
 # Access GraphQL playground at http://localhost:8080/
+# GraphQL API endpoint: POST http://localhost:8080/graphql
 ```
 
 ### Docker Build
@@ -67,13 +68,18 @@ cargo check
 - `src/bin/bootstrap.rs` - AWS Lambda handler entry point
 - `src/bin/homeapi.rs` - Local development server entry point
 
+### API Endpoints
+
+- `/` - GraphQL Playground (GET)
+- `/graphql` - GraphQL API endpoint (GET for playground, POST for queries)
+
 ### Key Design Patterns
 
 1. **Dual Deployment Mode**: The project separates the Lambda handler (`bootstrap`) from the local development server (`homeapi`), both using the same core GraphQL schema.
 
-2. **GraphQL Schema**: Uses async-graphql with warp integration. The schema is initialized once using `once_cell::sync::Lazy` for performance.
+2. **GraphQL Schema**: Uses async-graphql v7 with axum integration. The schema is initialized asynchronously at startup. In Lambda, uses `tokio::sync::OnceCell` for lazy initialization.
 
-3. **DynamoDB Integration**: All DynamoDB operations are abstracted through a `Client` wrapper in `src/dynamodb.rs`, which handles serialization/deserialization using `serde_dynamodb`.
+3. **DynamoDB Integration**: All DynamoDB operations are abstracted through a `Client` wrapper in `src/dynamodb.rs`, which handles serialization/deserialization using `serde_dynamo` (compatible with AWS SDK v1.x).
 
 4. **Environment Configuration**: Uses environment variables for configuration:
    - `TABLE_NAME` - Required for DynamoDB table name
@@ -82,6 +88,21 @@ cargo check
 ### Development Considerations
 
 - The project uses Rust edition 2024
+- Web framework: Axum v0.8 (upgraded from Warp v0.3) for better performance and ecosystem integration
+- GraphQL: async-graphql v7 (upgraded from v3) with axum integration
 - TLS is handled via rustls (not OpenSSL) for better portability
 - The Docker build uses a custom Lambda Rust builder image
+- Uses AWS SDK for Rust v1.x (upgraded from deprecated rusoto) with serde_dynamo for serialization
+- base64 v0.22 for encoding/decoding node IDs in GraphQL
+- Lambda runtime v0.14 with modern `service_fn` and `LambdaEvent` API
 - No test suite currently exists - consider adding tests when implementing new features
+
+### Recent Upgrades
+
+The following dependencies have been upgraded to their latest versions:
+- `async-graphql`: 3.0 → 7.0
+- `axum`: (new, replaced warp 0.3)
+- `aws-sdk-dynamodb`: (replaced rusoto 0.47)
+- `base64`: 0.13 → 0.22
+- `env_logger`: 0.8 → 0.11
+- `serde_dynamo`: (replaced serde_dynamodb 0.9)
