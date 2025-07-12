@@ -1,9 +1,6 @@
-use anyhow::Result;
 use async_graphql::Request;
-use lambda_runtime::{Error, LambdaEvent, service_fn};
+use lambda_runtime::{Error, LambdaEvent, run, service_fn, tracing};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::OnceCell;
 
 use homeapi::dynamodb::Client;
 use homeapi::graphql::{HomeAPI, schema};
@@ -13,32 +10,33 @@ struct Event {
     body: Option<String>,
 }
 
-static SCHEMA: OnceCell<Arc<HomeAPI>> = OnceCell::const_new();
-
-async fn get_schema() -> Arc<HomeAPI> {
-    SCHEMA
-        .get_or_init(|| async {
-            let config =
-                aws_config::load_defaults(aws_config::BehaviorVersion::v2025_01_17()).await;
-            let dynamodb = aws_sdk_dynamodb::Client::new(&config);
-            Arc::new(schema(Client::new(
-                dynamodb,
-                std::env::var("TABLE_NAME").unwrap(),
-            )))
-        })
-        .await
-        .clone()
+async fn get_schema() -> Result<HomeAPI, Error> {
+    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let dynamodb = aws_sdk_dynamodb::Client::new(&config);
+    let table_name = match std::env::var("TABLE_NAME") {
+        Ok(name) => name,
+        Err(_) => {
+            eprintln!("TABLE_NAME environment variable not set");
+            std::process::exit(1);
+        }
+    };
+    Ok(schema(Client::new(dynamodb, table_name)))
 }
 
-async fn handler(event: LambdaEvent<Event>) -> Result<String, Error> {
-    let schema = get_schema().await;
-    let req: Request = serde_json::from_str(&event.payload.body.unwrap())?;
+async fn function_handler(event: LambdaEvent<Event>) -> Result<String, Error> {
+    let schema = get_schema().await?;
+    let body = event
+        .payload
+        .body
+        .ok_or_else(|| Error::from("Missing request body"))?;
+    let req: Request = serde_json::from_str(&body)?;
     let res = schema.execute(req).await;
     Ok(serde_json::to_string(&res)?)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    lambda_runtime::run(service_fn(handler)).await?;
-    Ok(())
+    tracing::init_default_subscriber();
+
+    run(service_fn(function_handler)).await
 }

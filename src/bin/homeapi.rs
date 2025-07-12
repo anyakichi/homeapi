@@ -14,10 +14,12 @@ use tower_http::trace::TraceLayer;
 use homeapi::dynamodb::Client;
 use homeapi::graphql::{HomeAPI, schema};
 
-async fn create_schema() -> HomeAPI {
+async fn create_schema() -> Result<HomeAPI> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::v2025_01_17()).await;
     let dynamodb = aws_sdk_dynamodb::Client::new(&config);
-    schema(Client::new(dynamodb, std::env::var("TABLE_NAME").unwrap()))
+    let table_name = std::env::var("TABLE_NAME")
+        .map_err(|_| anyhow::anyhow!("TABLE_NAME environment variable not set"))?;
+    Ok(schema(Client::new(dynamodb, table_name)))
 }
 
 async fn graphql_handler(State(schema): State<HomeAPI>, req: GraphQLRequest) -> GraphQLResponse {
@@ -32,7 +34,7 @@ async fn graphql_playground() -> impl IntoResponse {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let schema = create_schema().await;
+    let schema = create_schema().await?;
 
     let app = Router::new()
         .route("/", get(graphql_playground))

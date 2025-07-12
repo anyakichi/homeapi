@@ -144,8 +144,8 @@ impl Client {
             .items
             .unwrap_or_else(Vec::new)
             .into_iter()
-            .map(|item| serde_dynamo::from_item(item).unwrap())
-            .collect::<Vec<D>>();
+            .map(|item| serde_dynamo::from_item(item))
+            .collect::<Result<Vec<D>, _>>()?;
 
         match (first, last) {
             (None, Some(_)) => result.reverse(),
@@ -191,11 +191,13 @@ impl Client {
         let items = items
             .into_iter()
             .map(|item| {
-                WriteRequest::builder()
-                    .put_request(PutRequest::builder().set_item(Some(item)).build().unwrap())
+                let put_request = PutRequest::builder()
+                    .set_item(Some(item))
                     .build()
+                    .map_err(|e| anyhow!("Failed to build PutRequest: {}", e))?;
+                Ok(WriteRequest::builder().put_request(put_request).build())
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         let mut request_items = HashMap::new();
         request_items.insert(self.table.clone(), items);
