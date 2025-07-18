@@ -6,28 +6,37 @@ use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse, Graph
 use axum::{
     Router,
     extract::{State, WebSocketUpgrade},
+    middleware,
     response::{Html, IntoResponse, Response},
     routing::get,
 };
 use tower_http::trace::TraceLayer;
 
+use homeapi::auth::{AuthUser, auth_middleware};
 use homeapi::dynamodb::Client;
 use homeapi::graphql::{HomeAPI, PubSub, schema};
 
-async fn create_schema() -> Result<HomeAPI> {
+async fn create_client() -> Result<Client> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::v2025_01_17()).await;
     let dynamodb = aws_sdk_dynamodb::Client::new(&config);
     let table_name = std::env::var("TABLE_NAME")
         .map_err(|_| anyhow::anyhow!("TABLE_NAME environment variable not set"))?;
+    Ok(Client::new(dynamodb, table_name))
+}
+
+async fn create_schema(client: Client) -> Result<HomeAPI> {
     let pubsub = PubSub::new();
-    Ok(schema(Client::new(dynamodb, table_name), pubsub))
+    Ok(schema(client, pubsub))
 }
 
 async fn graphql_post_handler(
     State(schema): State<HomeAPI>,
+    auth_user: AuthUser,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    schema.execute(req.into_inner()).await.into()
+    let mut request = req.into_inner();
+    request = request.data(auth_user);
+    schema.execute(request).await.into()
 }
 
 async fn graphql_ws_handler(
@@ -49,7 +58,8 @@ async fn graphql_playground() -> impl IntoResponse {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let schema = create_schema().await?;
+    let client = create_client().await?;
+    let schema = create_schema(client.clone()).await?;
 
     let app = Router::new()
         .route("/", get(graphql_playground))
@@ -57,11 +67,15 @@ async fn main() -> Result<()> {
             "/graphql",
             get(graphql_ws_handler).post(graphql_post_handler),
         )
+        .layer(middleware::from_fn_with_state(
+            client.clone(),
+            auth_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(schema);
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 8080));
-    println!("GraphQL playground: http://{}", addr);
+    println!("GraphQL playground: http://{addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

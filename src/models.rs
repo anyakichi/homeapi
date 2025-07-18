@@ -14,7 +14,7 @@ pub struct NodeId {
 impl NodeId {
     pub fn global_id(prefix: &str, pk: &str, sk: &str) -> ID {
         BASE64_STANDARD_NO_PAD
-            .encode(format!("{}:{}:{}", prefix, pk, sk))
+            .encode(format!("{prefix}:{pk}:{sk}"))
             .into()
     }
 
@@ -228,15 +228,15 @@ impl Electricity {
     }
 
     async fn cumulative_kwh_p(&self) -> Option<String> {
-        self.cumulative_kwh_p.map(|x| format!("{}", x))
+        self.cumulative_kwh_p.map(|x| format!("{x}"))
     }
 
     async fn cumulative_kwh_n(&self) -> Option<String> {
-        self.cumulative_kwh_n.map(|x| format!("{}", x))
+        self.cumulative_kwh_n.map(|x| format!("{x}"))
     }
 
     async fn current_w(&self) -> Option<String> {
-        self.current_w.map(|x| format!("{}", x))
+        self.current_w.map(|x| format!("{x}"))
     }
 }
 
@@ -422,6 +422,25 @@ impl PlaceCondition {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    #[serde(rename = "pk")]
+    pub email: String,
+
+    #[serde(rename = "sk")]
+    pub user_type: String, // Always "USER"
+}
+
+impl DynamoItem for User {
+    fn pk(&self) -> String {
+        self.email.clone()
+    }
+
+    fn sk_value(&self) -> String {
+        "USER".to_owned()
+    }
+}
+
 mod dynamodb_timestamp {
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Deserializer, Serializer};
@@ -430,7 +449,7 @@ mod dynamodb_timestamp {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("TS#{:?}", timestamp))
+        serializer.serialize_str(&format!("TS#{timestamp:?}"))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
@@ -453,7 +472,7 @@ mod dynamodb_fin_ts {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("FIN#TS#{:?}", timestamp))
+        serializer.serialize_str(&format!("FIN#TS#{timestamp:?}"))
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>

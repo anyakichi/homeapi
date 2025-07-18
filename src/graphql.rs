@@ -26,7 +26,7 @@ fn sk_time(prefix: &str, time: Option<String>, after: bool) -> Result<String> {
         }
     };
 
-    Ok(format!("{}{:?}", prefix, time))
+    Ok(format!("{prefix}{time:?}"))
 }
 
 async fn get_items<'de, D>(
@@ -303,6 +303,12 @@ pub struct PubSub {
     place_condition_sender: broadcast::Sender<PlaceCondition>,
 }
 
+impl Default for PubSub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PubSub {
     pub fn new() -> Self {
         let (electricity_sender, _) = broadcast::channel(100);
@@ -354,20 +360,13 @@ impl Subscription {
         pubsub.subscribe_electricity().filter_map(move |result| {
             let device = device.clone();
             async move {
-                match result {
-                    Ok(electricity) => {
-                        if let Some(ref d) = device {
-                            if electricity.device == *d {
-                                Some(electricity)
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(electricity)
-                        }
+                result.ok().and_then(|x| {
+                    if device.is_some_and(|d| x.device != d) {
+                        None
+                    } else {
+                        Some(x)
                     }
-                    Err(_) => None,
-                }
+                })
             }
         })
     }
@@ -383,20 +382,13 @@ impl Subscription {
             .filter_map(move |result| {
                 let device = device.clone();
                 async move {
-                    match result {
-                        Ok(final_electricity) => {
-                            if let Some(ref d) = device {
-                                if final_electricity.device == *d {
-                                    Some(final_electricity)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                Some(final_electricity)
-                            }
+                    result.ok().and_then(|x| {
+                        if device.is_some_and(|d| x.device != d) {
+                            None
+                        } else {
+                            Some(x)
                         }
-                        Err(_) => None,
-                    }
+                    })
                 }
             })
     }
@@ -412,20 +404,13 @@ impl Subscription {
             .filter_map(move |result| {
                 let device = device.clone();
                 async move {
-                    match result {
-                        Ok(place_condition) => {
-                            if let Some(ref d) = device {
-                                if place_condition.device == *d {
-                                    Some(place_condition)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                Some(place_condition)
-                            }
+                    result.ok().and_then(|x| {
+                        if device.is_some_and(|d| x.device != d) {
+                            None
+                        } else {
+                            Some(x)
                         }
-                        Err(_) => None,
-                    }
+                    })
                 }
             })
     }

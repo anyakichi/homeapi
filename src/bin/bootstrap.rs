@@ -10,7 +10,7 @@ struct Event {
     body: Option<String>,
 }
 
-async fn get_schema() -> Result<HomeAPI, Error> {
+async fn create_client() -> Result<Client, Error> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let dynamodb = aws_sdk_dynamodb::Client::new(&config);
     let table_name = match std::env::var("TABLE_NAME") {
@@ -20,12 +20,17 @@ async fn get_schema() -> Result<HomeAPI, Error> {
             std::process::exit(1);
         }
     };
+    Ok(Client::new(dynamodb, table_name))
+}
+
+async fn create_schema(client: Client) -> Result<HomeAPI, Error> {
     let pubsub = PubSub::new();
-    Ok(schema(Client::new(dynamodb, table_name), pubsub))
+    Ok(schema(client, pubsub))
 }
 
 async fn function_handler(event: LambdaEvent<Event>) -> Result<String, Error> {
-    let schema = get_schema().await?;
+    let client = create_client().await?;
+    let schema = create_schema(client).await?;
     let body = event
         .payload
         .body

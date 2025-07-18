@@ -18,6 +18,7 @@ pub enum Condition {
     Lt(String),
 }
 
+#[derive(Clone)]
 pub struct Client {
     pub dynamodb: DynamoDbClient,
     pub table: String,
@@ -218,9 +219,9 @@ impl Client {
     {
         let items = items
             .iter()
-            .map(|x| serde_dynamo::to_item(x))
+            .map(serde_dynamo::to_item)
             .collect::<Result<Vec<_>, _>>()?;
-        let _res = self.batch_put_items(items).await?;
+        self.batch_put_items(items).await?;
 
         Ok(())
     }
@@ -237,6 +238,17 @@ impl Client {
             .send()
             .await?;
 
+        Ok(())
+    }
+
+    pub async fn delete_item(&self, pk: &str, sk: &str) -> Result<()> {
+        self.dynamodb
+            .delete_item()
+            .table_name(&self.table)
+            .key("pk", AttributeValue::S(pk.to_string()))
+            .key("sk", AttributeValue::S(sk.to_string()))
+            .send()
+            .await?;
         Ok(())
     }
 
@@ -260,20 +272,20 @@ impl Client {
         let expression_attribute_names = Some(
             attrs
                 .keys()
-                .map(|x| (format!("#{}", x), x.to_owned()))
+                .map(|x| (format!("#{x}"), x.to_owned()))
                 .collect(),
         );
         let expression_attribute_values = Some(
             attrs
                 .iter()
-                .map(|(k, v)| (format!(":{}", k), v.to_owned()))
+                .map(|(k, v)| (format!(":{k}"), v.to_owned()))
                 .collect(),
         );
         let update_expression = Some(format!(
             "SET {}",
             attrs
                 .keys()
-                .map(|x| format!("#{} = :{}", x, x))
+                .map(|x| format!("#{x} = :{x}"))
                 .collect::<Vec<String>>()
                 .join(",")
         ));
