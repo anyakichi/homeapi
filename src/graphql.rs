@@ -7,10 +7,11 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::auth::AuthUser;
 use crate::dynamodb::{Client, Condition};
 use crate::models::{
-    Device, DynamoItem, Electricity, ElectricityInput, FinalElectricity, FinalElectricityInput,
-    NodeId, Place, PlaceCondition, PlaceConditionInput,
+    ApiKey, Device, DynamoItem, Electricity, ElectricityInput, FinalElectricity,
+    FinalElectricityInput, NodeId, Place, PlaceCondition, PlaceConditionInput,
 };
 
 fn sk_time(prefix: &str, time: Option<String>, after: bool) -> Result<String> {
@@ -102,6 +103,7 @@ fn place_condition(input: PlaceConditionInput) -> PlaceCondition {
 #[derive(Interface)]
 #[graphql(field(name = "id", desc = "The ID of the node", ty = "ID"))]
 pub enum Node {
+    ApiKey(ApiKey),
     Device(Device),
     Electricity(Electricity),
     FinalElectricity(FinalElectricity),
@@ -118,6 +120,12 @@ impl Query {
         let node_id = NodeId::from_global_id(id)?;
 
         match node_id.prefix.as_ref() {
+            "ApiKey" => {
+                // For ApiKey nodes, pk is the key_hash and sk is "APIKEY"
+                Ok(Node::ApiKey(
+                    dynamodb.get_item(node_id.pk, "APIKEY".to_string()).await?,
+                ))
+            }
             "Device" => Ok(Node::Device(
                 dynamodb.get_item(node_id.pk, node_id.sk).await?,
             )),
@@ -214,6 +222,26 @@ impl Query {
         ));
         get_items(dynamodb, &device, sk, None, None, first, last).await
     }
+
+    async fn api_keys(&self, ctx: &Context<'_>) -> Result<Vec<ApiKey>> {
+        let dynamodb = &ctx.data_unchecked::<Client>();
+        let auth_user = ctx.data_unchecked::<AuthUser>();
+
+        // Query GSI by user_email
+        let mut expression_attribute_values = std::collections::HashMap::new();
+        expression_attribute_values.insert(
+            ":email".to_string(),
+            aws_sdk_dynamodb::types::AttributeValue::S(auth_user.email.clone()),
+        );
+
+        Ok(dynamodb
+            .query_gsi::<ApiKey>(
+                "user_email-index", // GSI name - you'll need to create this GSI
+                "user_email = :email",
+                expression_attribute_values,
+            )
+            .await?)
+    }
 }
 
 pub struct Mutation;
@@ -293,6 +321,86 @@ impl Mutation {
         let new: PlaceCondition = dynamodb.update_item(&input).await?;
         pubsub.publish_place_condition(new.clone());
         Ok(new)
+    }
+
+    async fn create_api_key(
+        &self,
+        ctx: &Context<'_>,
+        name: String,
+        expires_at: Option<String>,
+    ) -> Result<ApiKeyCreated> {
+        use sha2::{Digest, Sha256};
+        use uuid::Uuid;
+
+        let dynamodb = &ctx.data_unchecked::<Client>();
+        let auth_user = ctx.data_unchecked::<AuthUser>();
+
+        // Generate API key: "ha_" + UUID v4 without hyphens
+        let key_id = Uuid::new_v4().to_string().replace("-", "");
+        let api_key = format!("ha_{key_id}");
+
+        // Hash the API key
+        let mut hasher = Sha256::new();
+        hasher.update(api_key.as_bytes());
+        let key_hash = format!("{:x}", hasher.finalize());
+
+        // Create the API key record
+        let mut api_key_record = ApiKey::new(auth_user.email.clone(), key_hash, name);
+
+        // Parse expires_at if provided
+        if let Some(expires_str) = expires_at {
+            api_key_record.expires_at =
+                Some(DateTime::parse_from_rfc3339(&expires_str)?.with_timezone(&Utc));
+        }
+
+        // Save to database
+        dynamodb.put_item(&api_key_record).await?;
+
+        Ok(ApiKeyCreated {
+            api_key_record,
+            key: api_key, // Return the actual key only on creation
+        })
+    }
+
+    async fn delete_api_key(&self, ctx: &Context<'_>, id: ID) -> Result<bool> {
+        let dynamodb = &ctx.data_unchecked::<Client>();
+        let auth_user = ctx.data_unchecked::<AuthUser>();
+        let node_id = NodeId::from_global_id(id)?;
+
+        if node_id.prefix != "ApiKey" {
+            return Err(Error::new("Invalid node ID for API key"));
+        }
+
+        // Verify the API key belongs to the authenticated user
+        let api_key: ApiKey = dynamodb
+            .get_item(node_id.pk.clone(), "APIKEY".to_string())
+            .await
+            .map_err(|_| Error::new("API key not found"))?;
+
+        if api_key.user_email != auth_user.email {
+            return Err(Error::new("Unauthorized"));
+        }
+
+        // Delete the API key
+        dynamodb.delete_item(&node_id.pk, "APIKEY").await?;
+        Ok(true)
+    }
+}
+
+#[derive(Clone)]
+pub struct ApiKeyCreated {
+    pub api_key_record: ApiKey,
+    pub key: String,
+}
+
+#[Object]
+impl ApiKeyCreated {
+    async fn api_key(&self) -> &ApiKey {
+        &self.api_key_record
+    }
+
+    async fn key(&self) -> &str {
+        &self.key
     }
 }
 

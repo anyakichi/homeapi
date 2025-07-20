@@ -441,6 +441,76 @@ impl DynamoItem for User {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    #[serde(rename = "pk")]
+    pub key_hash: String, // SHA256 hash of the actual API key
+
+    #[serde(rename = "sk")]
+    pub sk_value: String, // Always "APIKEY"
+
+    pub user_email: String, // For GSI
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl ApiKey {
+    pub fn new(email: String, key_hash: String, name: String) -> Self {
+        Self {
+            key_hash,
+            sk_value: "APIKEY".to_string(),
+            user_email: email,
+            name,
+            created_at: Utc::now(),
+            last_used_at: None,
+            expires_at: None,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        if let Some(expires_at) = self.expires_at {
+            expires_at < Utc::now()
+        } else {
+            false
+        }
+    }
+}
+
+impl DynamoItem for ApiKey {
+    fn pk(&self) -> String {
+        self.key_hash.clone()
+    }
+
+    fn sk_value(&self) -> String {
+        "APIKEY".to_string()
+    }
+}
+
+#[Object]
+impl ApiKey {
+    pub async fn id(&self) -> ID {
+        NodeId::global_id("ApiKey", &self.key_hash, "APIKEY")
+    }
+
+    async fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn created_at(&self) -> String {
+        self.created_at.to_rfc3339()
+    }
+
+    async fn last_used_at(&self) -> Option<String> {
+        self.last_used_at.map(|dt| dt.to_rfc3339())
+    }
+
+    async fn expires_at(&self) -> Option<String> {
+        self.expires_at.map(|dt| dt.to_rfc3339())
+    }
+}
+
 mod dynamodb_timestamp {
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Deserializer, Serializer};

@@ -252,6 +252,48 @@ impl Client {
         Ok(())
     }
 
+    pub async fn query_gsi<'de, D>(
+        &self,
+        index_name: &str,
+        key_condition_expression: &str,
+        expression_attribute_values: HashMap<String, AttributeValue>,
+    ) -> Result<Vec<D>>
+    where
+        D: Deserialize<'de>,
+    {
+        let mut all_items = Vec::new();
+        let mut last_evaluated_key = None;
+
+        loop {
+            let mut query_request = self
+                .dynamodb
+                .query()
+                .table_name(&self.table)
+                .index_name(index_name)
+                .key_condition_expression(key_condition_expression)
+                .set_expression_attribute_values(Some(expression_attribute_values.clone()));
+
+            if let Some(key) = last_evaluated_key {
+                query_request = query_request.set_exclusive_start_key(Some(key));
+            }
+
+            let output = query_request.send().await?;
+
+            if let Some(items) = output.items {
+                for item in items {
+                    all_items.push(serde_dynamo::from_item(item)?);
+                }
+            }
+
+            last_evaluated_key = output.last_evaluated_key;
+            if last_evaluated_key.is_none() {
+                break;
+            }
+        }
+
+        Ok(all_items)
+    }
+
     pub async fn update_item<'de, D, S>(&self, item: &S) -> Result<D>
     where
         D: Deserialize<'de>,

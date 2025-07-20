@@ -7,10 +7,11 @@ use axum::{
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::dynamodb::Client;
-use crate::models::User;
+use crate::models::{ApiKey, User};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -24,8 +25,35 @@ pub struct Claims {
 }
 
 #[derive(Clone)]
+pub enum AuthMethod {
+    GoogleOAuth(Claims),
+    ApiKey { email: String, key_id: String },
+}
+
+#[derive(Clone)]
 pub struct AuthUser {
-    pub claims: Claims,
+    pub email: String,
+    pub method: AuthMethod,
+}
+
+impl AuthUser {
+    pub fn from_claims(claims: Claims) -> Self {
+        let email = claims.email.clone();
+        Self {
+            email,
+            method: AuthMethod::GoogleOAuth(claims),
+        }
+    }
+
+    pub fn from_api_key(email: String, key_hash: String) -> Self {
+        Self {
+            email: email.clone(),
+            method: AuthMethod::ApiKey {
+                email,
+                key_id: key_hash,
+            },
+        }
+    }
 }
 
 // Cache for Google's public keys
@@ -112,6 +140,39 @@ async fn verify_google_token(token: &str, expected_aud: &str) -> Result<Claims> 
     try_verify().await
 }
 
+async fn verify_api_key(token: &str, dynamodb: &Client) -> Result<AuthUser> {
+    // API key format: "ha_" + uuid v4 (without hyphens)
+    if !token.starts_with("ha_") || token.len() != 35 {
+        return Err(anyhow::anyhow!("Invalid API key format"));
+    }
+
+    // Hash the API key
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let key_hash = format!("{:x}", hasher.finalize());
+
+    // Direct lookup by key hash
+    let api_key: ApiKey = dynamodb
+        .get_item(key_hash, "APIKEY".to_string())
+        .await
+        .map_err(|_| anyhow::anyhow!("Invalid API key"))?;
+
+    // Check if expired
+    if api_key.is_expired() {
+        return Err(anyhow::anyhow!("API key has expired"));
+    }
+
+    // Update last_used_at (fire and forget)
+    let mut updated_key = api_key.clone();
+    updated_key.last_used_at = Some(chrono::Utc::now());
+    let dynamodb_clone = dynamodb.clone();
+    tokio::spawn(async move {
+        let _ = dynamodb_clone.put_item(&updated_key).await;
+    });
+
+    Ok(AuthUser::from_api_key(api_key.user_email, api_key.key_hash))
+}
+
 pub async fn auth_middleware(
     State(dynamodb): State<Client>,
     mut req: axum::http::Request<axum::body::Body>,
@@ -138,7 +199,7 @@ pub async fn auth_middleware(
                             .await
                         {
                             Ok(_user) => {
-                                req.extensions_mut().insert(AuthUser { claims });
+                                req.extensions_mut().insert(AuthUser::from_claims(claims));
                                 return Ok(next.run(req).await);
                             }
                             Err(e) => {
@@ -148,6 +209,28 @@ pub async fn auth_middleware(
                     }
                     Err(e) => {
                         eprintln!("Token verification failed: {e}");
+                    }
+                }
+
+                // If Google OAuth fails, try API key authentication
+                match verify_api_key(token, &dynamodb).await {
+                    Ok(auth_user) => {
+                        // Check if user exists in database
+                        match dynamodb
+                            .get_item::<User>(auth_user.email.clone(), "USER".to_string())
+                            .await
+                        {
+                            Ok(_user) => {
+                                req.extensions_mut().insert(auth_user);
+                                return Ok(next.run(req).await);
+                            }
+                            Err(e) => {
+                                eprintln!("Error checking user in database: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("API key verification failed: {e}");
                     }
                 }
             }
