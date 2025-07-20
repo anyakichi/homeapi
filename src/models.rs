@@ -433,11 +433,11 @@ pub struct User {
 
 impl DynamoItem for User {
     fn pk(&self) -> String {
-        self.email.clone()
+        "USER".to_owned()
     }
 
     fn sk_value(&self) -> String {
-        "USER".to_owned()
+        self.email.clone()
     }
 }
 
@@ -480,11 +480,11 @@ impl ApiKey {
 
 impl DynamoItem for ApiKey {
     fn pk(&self) -> String {
-        self.key_hash.clone()
+        "APIKEY".to_string()
     }
 
     fn sk_value(&self) -> String {
-        "APIKEY".to_string()
+        self.key_hash.clone()
     }
 }
 

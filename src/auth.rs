@@ -153,7 +153,7 @@ async fn verify_api_key(token: &str, dynamodb: &Client) -> Result<AuthUser> {
 
     // Direct lookup by key hash
     let api_key: ApiKey = dynamodb
-        .get_item(key_hash, "APIKEY".to_string())
+        .get_item("APIKEY".to_string(), key_hash)
         .await
         .map_err(|_| anyhow::anyhow!("Invalid API key"))?;
 
@@ -195,7 +195,7 @@ pub async fn auth_middleware(
                     Ok(claims) => {
                         // Check if user exists in database
                         match dynamodb
-                            .get_item::<User>(claims.email.clone(), "USER".to_string())
+                            .get_item::<User>("USER".to_string(), claims.email.clone())
                             .await
                         {
                             Ok(_user) => {
@@ -217,7 +217,7 @@ pub async fn auth_middleware(
                     Ok(auth_user) => {
                         // Check if user exists in database
                         match dynamodb
-                            .get_item::<User>(auth_user.email.clone(), "USER".to_string())
+                            .get_item::<User>("USER".to_string(), auth_user.email.clone())
                             .await
                         {
                             Ok(_user) => {

@@ -373,7 +373,7 @@ impl Mutation {
 
         // Verify the API key belongs to the authenticated user
         let api_key: ApiKey = dynamodb
-            .get_item(node_id.pk.clone(), "APIKEY".to_string())
+            .get_item("APIKEY".to_string(), node_id.sk.clone())
             .await
             .map_err(|_| Error::new("API key not found"))?;
 
@@ -382,7 +382,7 @@ impl Mutation {
         }
 
         // Delete the API key
-        dynamodb.delete_item(&node_id.pk, "APIKEY").await?;
+        dynamodb.delete_item("APIKEY", &node_id.sk).await?;
         Ok(true)
     }
 }
