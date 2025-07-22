@@ -7,21 +7,25 @@ This implementation adds API key authentication alongside the existing Google OA
 ## DynamoDB Schema
 
 ### Primary Table Structure
+
 - **PK**: SHA256 hash of the API key
 - **SK**: "APIKEY" (constant)
 - **Attributes**: user_email, name, created_at, last_used_at, expires_at
 
 ### Global Secondary Index (GSI)
+
 - **Index Name**: `user_email-index`
 - **Partition Key**: `user_email`
 
 This design allows:
+
 - O(1) lookup for API key verification (direct PK lookup)
 - Efficient query for all API keys belonging to a user (GSI query)
 
 ## API Key Format
 
 API keys follow the format: `ha_` + UUID v4 (without hyphens)
+
 - Example: `ha_550e8400e29b41d4a716446655440000`
 - Total length: 35 characters
 
@@ -34,7 +38,7 @@ API keys follow the format: `ha_` + UUID v4 (without hyphens)
 mutation {
   createApiKey(
     name: "My API Key"
-    expiresAt: "2025-12-31T23:59:59Z"  # Optional
+    expiresAt: "2025-12-31T23:59:59Z" # Optional
   ) {
     apiKey {
       id
@@ -42,7 +46,7 @@ mutation {
       createdAt
       expiresAt
     }
-    key  # The actual API key - only shown on creation
+    key # The actual API key - only shown on creation
   }
 }
 
@@ -72,6 +76,7 @@ query {
 ## Usage
 
 Include the API key in the Authorization header:
+
 ```bash
 curl -H "Authorization: Bearer ha_xxxxx..." \
      -H "Content-Type: application/json" \

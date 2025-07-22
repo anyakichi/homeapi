@@ -100,6 +100,7 @@ cargo check
 ### Recent Upgrades
 
 The following dependencies have been upgraded to their latest versions:
+
 - `async-graphql`: 3.0 → 7.0
 - `axum`: (new, replaced warp 0.3)
 - `aws-sdk-dynamodb`: (replaced rusoto 0.47)
