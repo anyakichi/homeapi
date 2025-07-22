@@ -424,11 +424,10 @@ impl PlaceCondition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    #[serde(rename = "pk")]
-    pub email: String,
+    pub pk: String,
 
     #[serde(rename = "sk")]
-    pub user_type: String, // Always "USER"
+    pub email: String,
 }
 
 impl DynamoItem for User {
@@ -443,11 +442,10 @@ impl DynamoItem for User {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
-    #[serde(rename = "pk")]
-    pub key_hash: String, // SHA256 hash of the actual API key
+    pub pk: String,
 
     #[serde(rename = "sk")]
-    pub sk_value: String, // Always "APIKEY"
+    pub key_hash: String, // SHA256 hash of the actual API key
 
     pub user_email: String, // For GSI
     pub name: String,
@@ -459,8 +457,8 @@ pub struct ApiKey {
 impl ApiKey {
     pub fn new(email: String, key_hash: String, name: String) -> Self {
         Self {
+            pk: "APIKEY".to_string(),
             key_hash,
-            sk_value: "APIKEY".to_string(),
             user_email: email,
             name,
             created_at: Utc::now(),
