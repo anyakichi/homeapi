@@ -190,47 +190,50 @@ pub async fn auth_middleware(
     if let Some(auth_header) = req.headers().get(AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                // Verify Google ID token
-                match verify_google_token(token, &expected_aud).await {
-                    Ok(claims) => {
-                        // Check if user exists in database
-                        match dynamodb
-                            .get_item::<User>("USER".to_string(), claims.email.clone())
-                            .await
-                        {
-                            Ok(_user) => {
-                                req.extensions_mut().insert(AuthUser::from_claims(claims));
-                                return Ok(next.run(req).await);
-                            }
-                            Err(e) => {
-                                eprintln!("Error checking user in database: {e}");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Token verification failed: {e}");
-                    }
-                }
-
-                // If Google OAuth fails, try API key authentication
-                match verify_api_key(token, &dynamodb).await {
-                    Ok(auth_user) => {
-                        // Check if user exists in database
-                        match dynamodb
-                            .get_item::<User>("USER".to_string(), auth_user.email.clone())
-                            .await
-                        {
-                            Ok(_user) => {
-                                req.extensions_mut().insert(auth_user);
-                                return Ok(next.run(req).await);
-                            }
-                            Err(e) => {
-                                eprintln!("Error checking user in database: {e}");
+                // Check if it's an API key (starts with "ha_")
+                if token.starts_with("ha_") {
+                    // API key authentication
+                    match verify_api_key(token, &dynamodb).await {
+                        Ok(auth_user) => {
+                            // Check if user exists in database
+                            match dynamodb
+                                .get_item::<User>("USER".to_string(), auth_user.email.clone())
+                                .await
+                            {
+                                Ok(_user) => {
+                                    req.extensions_mut().insert(auth_user);
+                                    return Ok(next.run(req).await);
+                                }
+                                Err(e) => {
+                                    eprintln!("Error checking user in database: {e}");
+                                }
                             }
                         }
+                        Err(e) => {
+                            eprintln!("API key verification failed: {e}");
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("API key verification failed: {e}");
+                } else {
+                    // Google OAuth token
+                    match verify_google_token(token, &expected_aud).await {
+                        Ok(claims) => {
+                            // Check if user exists in database
+                            match dynamodb
+                                .get_item::<User>("USER".to_string(), claims.email.clone())
+                                .await
+                            {
+                                Ok(_user) => {
+                                    req.extensions_mut().insert(AuthUser::from_claims(claims));
+                                    return Ok(next.run(req).await);
+                                }
+                                Err(e) => {
+                                    eprintln!("Error checking user in database: {e}");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Token verification failed: {e}");
+                        }
                     }
                 }
             }
